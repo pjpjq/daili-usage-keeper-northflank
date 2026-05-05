@@ -22,6 +22,11 @@ Default variables:
 
 - `CPA_BASE_URL=https://pjpjq-daili.hf.space`
 - `REDIS_QUEUE_ADDR=127.0.0.1:9` to force fast HTTP fallback to CPA `/v0/management/usage-queue`, because Hugging Face Spaces cannot reach the raw CPA TCP/RESP port across Spaces.
-- `AUTH_ENABLED=false` because this Space is intended to be private. Enable it and set `LOGIN_PASSWORD` if the Space is made public.
+- `AUTH_ENABLED=true`; set `LOGIN_PASSWORD` as a Space secret. The Space can be public while the dashboard remains password protected.
 
 Persistent history requires Hugging Face persistent storage or another backup strategy for `/data`.
+
+Runtime secrets configured on Hugging Face:
+
+- `CPA_MANAGEMENT_KEY`
+- `LOGIN_PASSWORD`
