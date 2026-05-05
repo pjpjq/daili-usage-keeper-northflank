@@ -1,16 +1,36 @@
-FROM ghcr.io/willxup/cpa-usage-keeper:latest
+# syntax=docker/dockerfile:1
 
-ENV APP_PORT=8080 \
-    CPA_BASE_URL=https://pjpjq-daili.hf.space \
-    REDIS_QUEUE_ADDR=127.0.0.1:9 \
-    AUTH_ENABLED=true \
-    TZ=Asia/Shanghai \
-    WORK_DIR=/data \
-    LOG_FILE_ENABLED=true \
-    BACKUP_ENABLED=true
+FROM node:22-alpine AS web-builder
+WORKDIR /app/web
+COPY web/package.json web/package-lock.json ./
+RUN npm ci
+COPY web/ ./
+RUN npm run build
 
-COPY entrypoint.space.sh /usr/local/bin/entrypoint.space.sh
-RUN chmod +x /usr/local/bin/entrypoint.space.sh
+FROM golang:1.22-alpine AS go-builder
+WORKDIR /app
+RUN apk add --no-cache build-base
+COPY go.mod go.sum ./
+RUN go mod download
+COPY cmd/ ./cmd/
+COPY internal/ ./internal/
+COPY --from=web-builder /app/web/dist ./web/dist
+COPY web/static.go ./web/static.go
+RUN CGO_ENABLED=1 GOOS=linux go build -o /out/cpa-usage-keeper ./cmd/server/main.go
 
-ENTRYPOINT ["/usr/local/bin/entrypoint.space.sh"]
+FROM alpine:3.20
+WORKDIR /
+RUN apk add --no-cache ca-certificates tzdata su-exec \
+	&& addgroup -S app \
+	&& adduser -S -G app app \
+	&& mkdir -p /data \
+	&& chown -R app:app /data
+COPY --from=go-builder /out/cpa-usage-keeper /app/cpa-usage-keeper
+COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+RUN sed -i 's/\r$//' /usr/local/bin/docker-entrypoint.sh \
+	&& chmod +x /usr/local/bin/docker-entrypoint.sh
+VOLUME ["/data"]
+EXPOSE 8080
+HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 CMD wget -q --spider "http://127.0.0.1:${APP_PORT:-8080}${APP_BASE_PATH:-}/healthz" || exit 1
+ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
 CMD ["/app/cpa-usage-keeper"]
