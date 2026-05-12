@@ -20,17 +20,21 @@ RUN CGO_ENABLED=1 GOOS=linux go build -o /out/cpa-usage-keeper ./cmd/server/main
 
 FROM alpine:3.20
 WORKDIR /
-RUN apk add --no-cache ca-certificates tzdata su-exec \
+RUN apk add --no-cache ca-certificates tzdata su-exec python3 py3-pip \
+	&& python3 -m pip install --no-cache-dir --break-system-packages huggingface_hub \
 	&& addgroup -S app \
 	&& adduser -S -G app app \
 	&& mkdir -p /data \
 	&& chown -R app:app /data
 COPY --from=go-builder /out/cpa-usage-keeper /app/cpa-usage-keeper
+COPY hf_state_snapshot.py /app/hf_state_snapshot.py
 COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+COPY entrypoint.space.sh /usr/local/bin/entrypoint.space.sh
 RUN sed -i 's/\r$//' /usr/local/bin/docker-entrypoint.sh \
-	&& chmod +x /usr/local/bin/docker-entrypoint.sh
+	&& sed -i 's/\r$//' /usr/local/bin/entrypoint.space.sh \
+	&& chmod +x /usr/local/bin/docker-entrypoint.sh /usr/local/bin/entrypoint.space.sh
 VOLUME ["/data"]
 EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 CMD wget -q --spider "http://127.0.0.1:${APP_PORT:-8080}${APP_BASE_PATH:-}/healthz" || exit 1
-ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
+ENTRYPOINT ["/usr/local/bin/entrypoint.space.sh"]
 CMD ["/app/cpa-usage-keeper"]

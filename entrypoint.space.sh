@@ -10,6 +10,12 @@ export REDIS_QUEUE_ADDR="${REDIS_QUEUE_ADDR:-127.0.0.1:9}"
 export WORK_DIR="${WORK_DIR:-/data}"
 export TZ="${TZ:-Asia/Shanghai}"
 export AUTH_ENABLED="${AUTH_ENABLED:-true}"
+export KEEPER_HF_REPO_ID="${KEEPER_HF_REPO_ID:-pjpjq/daili-usage-state}"
+export KEEPER_HF_REPO_TYPE="${KEEPER_HF_REPO_TYPE:-dataset}"
+export KEEPER_HF_PATH="${KEEPER_HF_PATH:-usage-keeper/app.db}"
+export KEEPER_HF_ROTATE_INTERVAL="${KEEPER_HF_ROTATE_INTERVAL:-3600}"
+export KEEPER_HF_ROTATE_KEEP="${KEEPER_HF_ROTATE_KEEP:-48}"
+export KEEPER_HF_UPLOAD_INTERVAL="${KEEPER_HF_UPLOAD_INTERVAL:-300}"
 
 missing=""
 [ -n "${CPA_MANAGEMENT_KEY:-}" ] || missing="$missing CPA_MANAGEMENT_KEY"
@@ -28,5 +34,31 @@ if [ -n "$missing" ]; then
 HTML
   exec busybox httpd -f -p "0.0.0.0:${APP_PORT}" -h /tmp/placeholder
 fi
+
+mkdir -p "$WORK_DIR"
+
+restore_sqlite_snapshot() {
+  if [ -z "${KEEPER_HF_TOKEN:-}" ] || [ -z "${KEEPER_HF_REPO_ID:-}" ] || [ -z "${KEEPER_HF_PATH:-}" ]; then
+    echo "keeper hf snapshot restore disabled: missing token/repo/path"
+    return 0
+  fi
+  python3 /app/hf_state_snapshot.py download "$WORK_DIR/app.db" || echo "keeper hf snapshot restore failed"
+}
+
+upload_sqlite_snapshot_loop() {
+  if [ -z "${KEEPER_HF_TOKEN:-}" ] || [ -z "${KEEPER_HF_REPO_ID:-}" ] || [ -z "${KEEPER_HF_PATH:-}" ]; then
+    echo "keeper hf snapshot upload disabled: missing token/repo/path"
+    return 0
+  fi
+  while true; do
+    if [ -f "$WORK_DIR/app.db" ] && [ -s "$WORK_DIR/app.db" ]; then
+      python3 /app/hf_state_snapshot.py upload "$WORK_DIR/app.db" || echo "keeper hf snapshot upload failed"
+    fi
+    sleep "${KEEPER_HF_UPLOAD_INTERVAL}"
+  done
+}
+
+restore_sqlite_snapshot
+upload_sqlite_snapshot_loop &
 
 exec /usr/local/bin/docker-entrypoint.sh "$@"
