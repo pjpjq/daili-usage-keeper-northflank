@@ -225,10 +225,11 @@ describe('UsagePage request event filters', () => {
 });
 
 describe('UsagePage time range options', () => {
-  it('places Today after 24h position and removes 24h from selectable ranges', () => {
+  it('includes All, places Today after 24h position, and removes 24h from selectable ranges', () => {
     const options = getTimeRangeOptions((key) => `translated:${key}`);
 
-    expect(options.map((option) => option.value)).toEqual(['4h', '8h', '12h', 'today', '7d', 'custom']);
+    expect(options.map((option) => option.value)).toEqual(['all', '4h', '8h', '12h', 'today', '7d', 'custom']);
+    expect(options.map((option) => option.label)).toContain('translated:usage_stats.range_all');
     expect(options.map((option) => option.label)).toContain('translated:usage_stats.range_today');
   });
 });

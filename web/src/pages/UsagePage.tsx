@@ -68,10 +68,11 @@ const CHART_LINES_STORAGE_KEY = 'cli-proxy-usage-chart-lines-v1';
 const TIME_RANGE_STORAGE_KEY = 'cli-proxy-usage-time-range-v1';
 const CUSTOM_TIME_RANGE_STORAGE_KEY = 'cli-proxy-usage-custom-range-v1';
 const DEFAULT_CHART_LINES = ['all'];
-const DEFAULT_TIME_RANGE: UsageTimeRange = '8h';
+const DEFAULT_TIME_RANGE: UsageTimeRange = 'all';
 const DEFAULT_CUSTOM_WINDOW_HOURS = 8;
 const MAX_CHART_LINES = 9;
-const TIME_RANGE_OPTIONS: ReadonlyArray<{ value: Exclude<UsageTimeRange, 'all' | '24h'>; labelKey: string }> = [
+const TIME_RANGE_OPTIONS: ReadonlyArray<{ value: Exclude<UsageTimeRange, '24h'>; labelKey: string }> = [
+  { value: 'all', labelKey: 'usage_stats.range_all' },
   { value: '4h', labelKey: 'usage_stats.range_4h' },
   { value: '8h', labelKey: 'usage_stats.range_8h' },
   { value: '12h', labelKey: 'usage_stats.range_12h' },
@@ -340,7 +341,7 @@ const loadTimeRange = (): UsageTimeRange => {
       return DEFAULT_TIME_RANGE;
     }
     const raw = localStorage.getItem(TIME_RANGE_STORAGE_KEY);
-    if (!isUsageTimeRange(raw) || raw === 'all' || raw === '24h') {
+    if (!isUsageTimeRange(raw) || raw === '24h') {
       return DEFAULT_TIME_RANGE;
     }
     return raw;
