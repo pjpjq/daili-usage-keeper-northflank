@@ -18,7 +18,7 @@ from huggingface_hub.errors import EntryNotFoundError, RepositoryNotFoundError
 
 
 ROTATION_MANIFEST_TYPE = "daili_usage_keeper_sqlite_rotation_v1"
-DEFAULT_ROTATE_INTERVAL_SECONDS = 3600
+DEFAULT_ROTATE_INTERVAL_SECONDS = 60
 DEFAULT_ROTATE_KEEP = 48
 
 
@@ -41,6 +41,13 @@ def env_int(name: str, default: int) -> int:
         return max(0, int(raw))
     except ValueError:
         return default
+
+
+def env_bool(name: str, default: bool = False) -> bool:
+    raw = env(name)
+    if not raw:
+        return default
+    return raw.lower() in {"1", "true", "yes", "on"}
 
 
 def isoformat_utc(value: datetime) -> str:
@@ -126,10 +133,66 @@ def latest_snapshot_from_manifest(token: str, repo_id: str, path_in_repo: str) -
     return download_repo_file(token, repo_id, latest_path)
 
 
+def is_history_path(path_in_repo: str, candidate: str) -> bool:
+    prefix = history_dir_for(path_in_repo).rstrip("/") + "/"
+    return candidate.startswith(prefix) and candidate != prefix
+
+
+def list_repo_files_safe(api: HfApi, repo_id: str) -> set[str] | None:
+    try:
+        return set(api.list_repo_files(repo_id=repo_id, repo_type=repo_type()))
+    except Exception:
+        return None
+
+
+def existing_history_paths(path_in_repo: str, repo_files: set[str] | None) -> list[str]:
+    if repo_files is None:
+        return []
+    return sorted(
+        (item for item in repo_files if is_history_path(path_in_repo, item)),
+        reverse=True,
+    )
+
+
+def retained_history_paths(
+    path_in_repo: str,
+    current_path: str,
+    previous_paths: list[str],
+    existing_paths: list[str],
+    rotate_keep: int,
+) -> list[str]:
+    retained: list[str] = []
+    seen: set[str] = set()
+    for item in [current_path, *existing_paths, *previous_paths]:
+        if not item or item in seen or not is_history_path(path_in_repo, item):
+            continue
+        seen.add(item)
+        retained.append(item)
+        if len(retained) >= rotate_keep:
+            break
+    return retained
+
+
+def deleted_history_paths(
+    path_in_repo: str,
+    previous_paths: list[str],
+    existing_paths: list[str],
+    retained_paths: list[str],
+    repo_listing_available: bool,
+) -> list[str]:
+    retained = set(retained_paths)
+    candidates = existing_paths if repo_listing_available else previous_paths
+    return [
+        item
+        for item in candidates
+        if is_history_path(path_in_repo, item) and item not in retained
+    ]
+
+
 def download_latest(token: str, repo_id: str, path_in_repo: str, local_path: Path) -> int:
-    downloaded = download_repo_file(token, repo_id, path_in_repo)
+    downloaded = latest_snapshot_from_manifest(token, repo_id, path_in_repo)
     if downloaded is None:
-        downloaded = latest_snapshot_from_manifest(token, repo_id, path_in_repo)
+        downloaded = download_repo_file(token, repo_id, path_in_repo)
     if downloaded is None:
         return 0
     local_path.parent.mkdir(parents=True, exist_ok=True)
@@ -174,46 +237,93 @@ def upload_snapshot(token: str, repo_id: str, path_in_repo: str, local_path: Pat
 
     rotate_interval = env_int("KEEPER_HF_ROTATE_INTERVAL", DEFAULT_ROTATE_INTERVAL_SECONDS)
     rotate_keep = env_int("KEEPER_HF_ROTATE_KEEP", DEFAULT_ROTATE_KEEP)
+    rotate_enabled = rotate_interval > 0 and rotate_keep > 0
+    write_latest = env_bool("KEEPER_HF_WRITE_LATEST", False)
+    if not rotate_enabled:
+        write_latest = True
+
     api = HfApi(token=token)
     temp_copy = backup_sqlite(local_path)
     try:
         checksum = sha256_file(temp_copy)
         metadata_path = manifest_path_for(path_in_repo) + ".state.json"
         current_state = load_json(download_repo_file(token, repo_id, metadata_path) or Path("/nonexistent"))
-        if current_state and current_state.get("sha256") == checksum:
-            return 0
+        same_checksum = bool(current_state and current_state.get("sha256") == checksum)
+        repo_files = list_repo_files_safe(api, repo_id) if rotate_enabled else None
 
-        operations = [
-            CommitOperationAdd(path_in_repo=path_in_repo, path_or_fileobj=str(temp_copy)),
-            CommitOperationAdd(
-                path_in_repo=metadata_path,
-                path_or_fileobj=json.dumps(
-                    {
-                        "updated_at": isoformat_utc(datetime.now(UTC)),
-                        "sha256": checksum,
-                        "size_bytes": temp_copy.stat().st_size,
-                    },
-                    ensure_ascii=False,
-                    indent=2,
-                    sort_keys=True,
-                ).encode("utf-8"),
-            ),
-        ]
+        operations = []
+        if write_latest:
+            if not same_checksum:
+                operations.append(CommitOperationAdd(path_in_repo=path_in_repo, path_or_fileobj=str(temp_copy)))
+        elif repo_files is not None and path_in_repo in repo_files:
+            operations.append(CommitOperationDelete(path_in_repo=path_in_repo))
 
-        if rotate_interval > 0 and rotate_keep > 0:
+        if not same_checksum:
+            operations.append(
+                CommitOperationAdd(
+                    path_in_repo=metadata_path,
+                    path_or_fileobj=json.dumps(
+                        {
+                            "updated_at": isoformat_utc(datetime.now(UTC)),
+                            "sha256": checksum,
+                            "size_bytes": temp_copy.stat().st_size,
+                        },
+                        ensure_ascii=False,
+                        indent=2,
+                        sort_keys=True,
+                    ).encode("utf-8"),
+                )
+            )
+
+        if rotate_enabled:
             bucket_time = floor_time(snapshot_time_for(temp_copy), rotate_interval)
             rotated_path = history_path_for(path_in_repo, bucket_time)
             manifest_path = manifest_path_for(path_in_repo)
             manifest = load_manifest(token, repo_id, manifest_path) or {}
+            latest_path = manifest.get("latest_path")
+            latest_path_known = (
+                isinstance(latest_path, str)
+                and bool(latest_path)
+                and is_history_path(path_in_repo, latest_path)
+            )
+            latest_path_missing = bool(
+                repo_files is not None
+                and latest_path_known
+                and latest_path not in repo_files
+            )
+            needs_rotated_upload = (not same_checksum) or (not latest_path_known) or latest_path_missing
+            current_history_path = rotated_path if needs_rotated_upload else latest_path
             previous_paths = [
                 item
                 for item in manifest.get("retained_paths", [])
                 if isinstance(item, str) and item
             ]
-            retained_paths = [rotated_path, *[item for item in previous_paths if item != rotated_path]][:rotate_keep]
-            delete_paths = [item for item in previous_paths if item not in retained_paths]
-            if manifest.get("latest_path") != rotated_path:
+            repo_listing_available = repo_files is not None
+            existing_paths = existing_history_paths(path_in_repo, repo_files)
+            retained_paths = retained_history_paths(
+                path_in_repo,
+                current_history_path,
+                previous_paths,
+                existing_paths,
+                rotate_keep,
+            )
+            delete_paths = deleted_history_paths(
+                path_in_repo,
+                previous_paths,
+                existing_paths,
+                retained_paths,
+                repo_listing_available,
+            )
+            needs_manifest_update = (
+                needs_rotated_upload
+                or manifest.get("retained_paths") != retained_paths
+                or manifest.get("rotation_interval_seconds") != rotate_interval
+                or manifest.get("retention_count") != rotate_keep
+                or bool(delete_paths)
+            )
+            if needs_rotated_upload:
                 operations.append(CommitOperationAdd(path_in_repo=rotated_path, path_or_fileobj=str(temp_copy)))
+            if needs_manifest_update:
                 operations.append(
                     CommitOperationAdd(
                         path_in_repo=manifest_path,
@@ -221,7 +331,7 @@ def upload_snapshot(token: str, repo_id: str, path_in_repo: str, local_path: Pat
                             {
                                 "type": ROTATION_MANIFEST_TYPE,
                                 "version": 1,
-                                "latest_path": rotated_path,
+                                "latest_path": current_history_path,
                                 "updated_at": isoformat_utc(datetime.now(UTC)),
                                 "source_path": path_in_repo,
                                 "repo_type": repo_type(),
@@ -237,7 +347,10 @@ def upload_snapshot(token: str, repo_id: str, path_in_repo: str, local_path: Pat
                         ).encode("utf-8"),
                     )
                 )
-                operations.extend(CommitOperationDelete(path_in_repo=item) for item in delete_paths)
+            operations.extend(CommitOperationDelete(path_in_repo=item) for item in delete_paths)
+
+        if not operations:
+            return 0
 
         api.create_commit(
             repo_id=repo_id,
