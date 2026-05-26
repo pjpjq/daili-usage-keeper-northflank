@@ -3,6 +3,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import hf_state_snapshot as snapshot
@@ -112,6 +113,7 @@ class RotationRetentionTest(unittest.TestCase):
                         ],
                     },
                 ),
+                patch.object(snapshot, "prune_lfs_storage_if_due"),
             ):
                 self.assertEqual(snapshot.upload_snapshot("token", "repo", "usage-keeper/app.db", local_db), 0)
 
@@ -129,6 +131,61 @@ class RotationRetentionTest(unittest.TestCase):
             self.assertNotIn("usage-keeper/app.db", added_paths)
             self.assertIn("usage-keeper/app.db", deleted_paths)
             self.assertIn("usage-keeper/app.manifest.json", added_paths)
+
+    def test_stale_lfs_files_excludes_current_tree_oids(self) -> None:
+        class FakeApi:
+            def list_repo_tree(self, **_kwargs):
+                return [
+                    SimpleNamespace(lfs=SimpleNamespace(sha256="keep-1")),
+                    SimpleNamespace(lfs=SimpleNamespace(sha256="keep-2")),
+                    SimpleNamespace(lfs=None),
+                ]
+
+            def list_lfs_files(self, *_args, **_kwargs):
+                return [
+                    SimpleNamespace(file_oid="keep-1", size=10),
+                    SimpleNamespace(file_oid="stale-1", size=20),
+                    SimpleNamespace(file_oid="keep-2", size=30),
+                ]
+
+        stale, stale_bytes, total_count, current_count = snapshot.stale_lfs_files(FakeApi(), "token", "repo")
+
+        self.assertEqual([item.file_oid for item in stale], ["stale-1"])
+        self.assertEqual(stale_bytes, 20)
+        self.assertEqual(total_count, 3)
+        self.assertEqual(current_count, 2)
+
+    def test_prune_lfs_storage_deletes_only_stale_lfs_and_records_marker(self) -> None:
+        class FakeApi:
+            def __init__(self) -> None:
+                self.deleted = []
+                self.marker_operations = []
+
+            def list_repo_tree(self, **_kwargs):
+                return [SimpleNamespace(lfs=SimpleNamespace(sha256="current"))]
+
+            def list_lfs_files(self, *_args, **_kwargs):
+                return [
+                    SimpleNamespace(file_oid="current", size=10),
+                    SimpleNamespace(file_oid="old", size=20),
+                ]
+
+            def permanently_delete_lfs_files(self, _repo_id, lfs_files, **_kwargs) -> None:
+                self.deleted = list(lfs_files)
+
+            def create_commit(self, **kwargs) -> None:
+                self.marker_operations = kwargs["operations"]
+
+        fake_api = FakeApi()
+        with patch.object(snapshot, "lfs_prune_due", return_value=True):
+            snapshot.prune_lfs_storage_if_due("token", fake_api, "repo", "usage-keeper/app.db")
+
+        self.assertEqual([item.file_oid for item in fake_api.deleted], ["old"])
+        self.assertEqual(len(fake_api.marker_operations), 1)
+        self.assertEqual(
+            fake_api.marker_operations[0].path_in_repo,
+            "usage-keeper/app.manifest.json.lfs-prune.json",
+        )
 
 
 if __name__ == "__main__":
