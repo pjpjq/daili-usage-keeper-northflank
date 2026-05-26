@@ -9,7 +9,7 @@ import shutil
 import sqlite3
 import sys
 import tempfile
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path, PurePosixPath
 from typing import Any
 
@@ -20,6 +20,7 @@ from huggingface_hub.errors import EntryNotFoundError, RepositoryNotFoundError
 ROTATION_MANIFEST_TYPE = "daili_usage_keeper_sqlite_rotation_v1"
 DEFAULT_ROTATE_INTERVAL_SECONDS = 60
 DEFAULT_ROTATE_KEEP = 48
+DEFAULT_LFS_PRUNE_INTERVAL_SECONDS = 3600
 
 
 def env(name: str, default: str = "") -> str:
@@ -54,6 +55,15 @@ def isoformat_utc(value: datetime) -> str:
     return value.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+def parse_isoformat_utc(value: Any) -> datetime | None:
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone(UTC)
+    except ValueError:
+        return None
+
+
 def floor_time(value: datetime, interval_seconds: int) -> datetime:
     if interval_seconds <= 0:
         return value.astimezone(UTC)
@@ -68,6 +78,10 @@ def manifest_path_for(path_in_repo: str) -> str:
     if str(path.parent) == ".":
         return filename
     return str(path.parent / filename)
+
+
+def lfs_prune_marker_path_for(path_in_repo: str) -> str:
+    return manifest_path_for(path_in_repo) + ".lfs-prune.json"
 
 
 def history_dir_for(path_in_repo: str) -> str:
@@ -143,6 +157,111 @@ def list_repo_files_safe(api: HfApi, repo_id: str) -> set[str] | None:
         return set(api.list_repo_files(repo_id=repo_id, repo_type=repo_type()))
     except Exception:
         return None
+
+
+def current_lfs_file_oids(api: HfApi, token: str, repo_id: str) -> set[str]:
+    keep: set[str] = set()
+    for item in api.list_repo_tree(
+        repo_id=repo_id,
+        repo_type=repo_type(),
+        recursive=True,
+        expand=True,
+        token=token,
+    ):
+        lfs = getattr(item, "lfs", None)
+        sha256 = getattr(lfs, "sha256", None)
+        if isinstance(sha256, str) and sha256:
+            keep.add(sha256)
+    return keep
+
+
+def stale_lfs_files(api: HfApi, token: str, repo_id: str) -> tuple[list[Any], int, int, int]:
+    keep_oids = current_lfs_file_oids(api, token, repo_id)
+    all_lfs_files = list(api.list_lfs_files(repo_id, repo_type=repo_type(), token=token))
+    stale = [item for item in all_lfs_files if getattr(item, "file_oid", None) not in keep_oids]
+    stale_bytes = sum(getattr(item, "size", 0) or 0 for item in stale)
+    return stale, stale_bytes, len(all_lfs_files), len(keep_oids)
+
+
+def lfs_prune_due(token: str, repo_id: str, path_in_repo: str, now: datetime) -> bool:
+    interval_seconds = env_int("KEEPER_HF_LFS_PRUNE_INTERVAL", DEFAULT_LFS_PRUNE_INTERVAL_SECONDS)
+    if interval_seconds <= 0:
+        return False
+
+    marker = load_json(download_repo_file(token, repo_id, lfs_prune_marker_path_for(path_in_repo)) or Path("/nonexistent"))
+    last_pruned_at = parse_isoformat_utc(marker.get("last_pruned_at") if marker else None)
+    if last_pruned_at is None:
+        return True
+    return now.astimezone(UTC) - last_pruned_at >= timedelta(seconds=interval_seconds)
+
+
+def record_lfs_prune(
+    api: HfApi,
+    token: str,
+    repo_id: str,
+    path_in_repo: str,
+    *,
+    pruned_at: datetime,
+    stale_count: int,
+    stale_bytes: int,
+    total_lfs_count: int,
+    current_lfs_count: int,
+) -> None:
+    marker = {
+        "type": "daili_usage_keeper_lfs_prune_v1",
+        "version": 1,
+        "last_pruned_at": isoformat_utc(pruned_at),
+        "stale_lfs_deleted_count": stale_count,
+        "stale_lfs_deleted_bytes": stale_bytes,
+        "total_lfs_count_before_prune": total_lfs_count,
+        "current_lfs_count": current_lfs_count,
+        "rewrite_history": env_bool("KEEPER_HF_LFS_PRUNE_REWRITE_HISTORY", False),
+    }
+    api.create_commit(
+        repo_id=repo_id,
+        repo_type=repo_type(),
+        operations=[
+            CommitOperationAdd(
+                path_in_repo=lfs_prune_marker_path_for(path_in_repo),
+                path_or_fileobj=json.dumps(
+                    marker,
+                    ensure_ascii=False,
+                    indent=2,
+                    sort_keys=True,
+                ).encode("utf-8"),
+            )
+        ],
+        commit_message="Record daili usage keeper LFS prune",
+    )
+
+
+def prune_lfs_storage_if_due(token: str, api: HfApi, repo_id: str, path_in_repo: str) -> None:
+    now = datetime.now(UTC)
+    if not lfs_prune_due(token, repo_id, path_in_repo, now):
+        return
+
+    stale, stale_bytes, total_lfs_count, current_lfs_count = stale_lfs_files(api, token, repo_id)
+    rewrite_history = env_bool("KEEPER_HF_LFS_PRUNE_REWRITE_HISTORY", False)
+    if stale:
+        api.permanently_delete_lfs_files(
+            repo_id,
+            stale,
+            repo_type=repo_type(),
+            rewrite_history=rewrite_history,
+            token=token,
+        )
+
+    record_lfs_prune(
+        api,
+        token,
+        repo_id,
+        path_in_repo,
+        pruned_at=now,
+        stale_count=len(stale),
+        stale_bytes=stale_bytes,
+        total_lfs_count=total_lfs_count,
+        current_lfs_count=current_lfs_count,
+    )
 
 
 def existing_history_paths(path_in_repo: str, repo_files: set[str] | None) -> list[str]:
@@ -350,6 +469,11 @@ def upload_snapshot(token: str, repo_id: str, path_in_repo: str, local_path: Pat
             operations.extend(CommitOperationDelete(path_in_repo=item) for item in delete_paths)
 
         if not operations:
+            if rotate_enabled:
+                try:
+                    prune_lfs_storage_if_due(token, api, repo_id, path_in_repo)
+                except Exception as exc:
+                    print(f"keeper hf lfs prune failed: {exc}", file=sys.stderr)
             return 0
 
         api.create_commit(
@@ -358,6 +482,11 @@ def upload_snapshot(token: str, repo_id: str, path_in_repo: str, local_path: Pat
             operations=operations,
             commit_message="Update daili usage keeper sqlite snapshot",
         )
+        if rotate_enabled:
+            try:
+                prune_lfs_storage_if_due(token, api, repo_id, path_in_repo)
+            except Exception as exc:
+                print(f"keeper hf lfs prune failed: {exc}", file=sys.stderr)
         return 0
     finally:
         try:
