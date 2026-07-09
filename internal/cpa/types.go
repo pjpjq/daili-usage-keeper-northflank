@@ -95,17 +95,24 @@ type AuthFilesResponse struct {
 }
 
 type AuthFile struct {
-	AuthIndex   string `json:"auth_index"`
-	Name        string `json:"name"`
-	Email       string `json:"email"`
-	Type        string `json:"type"`
-	Provider    string `json:"provider"`
-	Label       string `json:"label"`
-	Status      string `json:"status"`
-	Source      string `json:"source"`
-	Disabled    bool   `json:"disabled"`
-	Unavailable bool   `json:"unavailable"`
-	RuntimeOnly bool   `json:"runtime_only"`
+	AuthIndex      string                  `json:"auth_index"`
+	Name           string                  `json:"name"`
+	Email          string                  `json:"email"`
+	Type           string                  `json:"type"`
+	Provider       string                  `json:"provider"`
+	Label          string                  `json:"label"`
+	Status         string                  `json:"status"`
+	Source         string                  `json:"source"`
+	Disabled       bool                    `json:"disabled"`
+	Unavailable    bool                    `json:"unavailable"`
+	RuntimeOnly    bool                    `json:"runtime_only"`
+	RecentRequests []AuthFileRecentRequest `json:"recent_requests"`
+}
+
+type AuthFileRecentRequest struct {
+	Time    string `json:"time"`
+	Success int64  `json:"success"`
+	Failed  int64  `json:"failed"`
 }
 
 type UsageQueueResult struct {

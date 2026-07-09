@@ -2,7 +2,10 @@ package service
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -32,6 +35,13 @@ const redisInboxProcessLimit = 1000
 const (
 	syncMetadataOptional = false
 	syncMetadataRequired = true
+)
+
+const (
+	authFileRecentAPIGroupKey = "auth-files-recent"
+	authFileRecentModel       = "recent-requests"
+	authFileRecentEndpoint    = "auth-files/recent_requests"
+	authFileRecentAuthType    = "oauth"
 )
 
 type SyncService struct {
@@ -536,7 +546,180 @@ func syncAuthFiles(ctx context.Context, db *gorm.DB, result *cpa.AuthFilesResult
 	if err := repository.ReplaceUsageIdentitiesForAuthType(ctx, db, identities, models.UsageIdentityAuthTypeAuthFile, now); err != nil {
 		return fmt.Errorf("sync auth file usage identities: %w", err)
 	}
+	if err := syncAuthFileRecentUsageEvents(ctx, db, result.Payload.Files, now); err != nil {
+		return fmt.Errorf("sync auth file recent usage events: %w", err)
+	}
 	return nil
+}
+
+func syncAuthFileRecentUsageEvents(ctx context.Context, db *gorm.DB, files []cpa.AuthFile, now time.Time) error {
+	if db == nil {
+		return fmt.Errorf("database is nil")
+	}
+	if len(files) == 0 {
+		return nil
+	}
+
+	location := time.Local
+	if location == nil {
+		location = time.UTC
+	}
+	nowLocal := now.In(location)
+	events := make([]models.UsageEvent, 0)
+	for _, file := range files {
+		for _, bucket := range file.RecentRequests {
+			startLocal, endLocal, ok := parseAuthFileRecentRequestBucket(bucket.Time, nowLocal, location)
+			if !ok {
+				continue
+			}
+			startUTC := startLocal.UTC()
+			endUTC := endLocal.UTC()
+			if bucket.Success > 0 {
+				generated, err := authFileRecentSyntheticEvents(ctx, db, file, startUTC, endUTC, false, bucket.Success)
+				if err != nil {
+					return err
+				}
+				events = append(events, generated...)
+			}
+			if bucket.Failed > 0 {
+				generated, err := authFileRecentSyntheticEvents(ctx, db, file, startUTC, endUTC, true, bucket.Failed)
+				if err != nil {
+					return err
+				}
+				events = append(events, generated...)
+			}
+		}
+	}
+	if len(events) == 0 {
+		return nil
+	}
+	inserted, deduped, err := repository.InsertUsageEvents(db, events)
+	if err != nil {
+		return err
+	}
+	logrus.WithFields(logrus.Fields{
+		"inserted_events": inserted,
+		"deduped_events":  deduped,
+	}).Debug("auth file recent usage fallback events synced")
+	return nil
+}
+
+func authFileRecentSyntheticEvents(ctx context.Context, db *gorm.DB, file cpa.AuthFile, bucketStart, bucketEnd time.Time, failed bool, reported int64) ([]models.UsageEvent, error) {
+	if reported <= 0 {
+		return nil, nil
+	}
+	realCount, err := countAuthFileRecentExistingEvents(ctx, db, file, bucketStart, bucketEnd, failed, false)
+	if err != nil {
+		return nil, err
+	}
+	syntheticCount, err := countAuthFileRecentExistingEvents(ctx, db, file, bucketStart, bucketEnd, failed, true)
+	if err != nil {
+		return nil, err
+	}
+	missing := reported - realCount - syntheticCount
+	if missing <= 0 {
+		return nil, nil
+	}
+
+	duration := bucketEnd.Sub(bucketStart)
+	if duration <= 0 {
+		duration = 10 * time.Minute
+	}
+	source := firstNonEmpty(file.Email, file.Label, file.Name, file.AuthIndex)
+	authIndex := strings.TrimSpace(file.AuthIndex)
+	prefix := authFileRecentEventKeyPrefix(file, bucketStart, failed)
+	events := make([]models.UsageEvent, 0, missing)
+	for i := int64(0); i < missing; i++ {
+		ordinal := syntheticCount + i
+		offset := time.Duration((ordinal + 1) * duration.Nanoseconds() / (reported + 1))
+		events = append(events, models.UsageEvent{
+			EventKey:    fmt.Sprintf("%s%d", prefix, ordinal),
+			APIGroupKey: authFileRecentAPIGroupKey,
+			Provider:    strings.TrimSpace(file.Provider),
+			Endpoint:    authFileRecentEndpoint,
+			AuthType:    authFileRecentAuthType,
+			Model:       authFileRecentModel,
+			Timestamp:   bucketStart.Add(offset).UTC(),
+			Source:      source,
+			AuthIndex:   authIndex,
+			Failed:      failed,
+		})
+	}
+	return events, nil
+}
+
+func countAuthFileRecentExistingEvents(ctx context.Context, db *gorm.DB, file cpa.AuthFile, bucketStart, bucketEnd time.Time, failed bool, synthetic bool) (int64, error) {
+	if db == nil {
+		return 0, fmt.Errorf("database is nil")
+	}
+	var count int64
+	query := db.WithContext(ctx).Model(&models.UsageEvent{}).
+		Where("timestamp >= ? AND timestamp < ? AND failed = ?", bucketStart.UTC(), bucketEnd.UTC(), failed)
+	if synthetic {
+		query = query.Where("api_group_key = ? AND event_key LIKE ?", authFileRecentAPIGroupKey, authFileRecentEventKeyPrefix(file, bucketStart.UTC(), failed)+"%")
+	} else {
+		query = query.Where("api_group_key <> ?", authFileRecentAPIGroupKey)
+		authIndex := strings.TrimSpace(file.AuthIndex)
+		if authIndex != "" {
+			query = query.Where("auth_index = ?", authIndex)
+		} else if source := firstNonEmpty(file.Email, file.Label, file.Name); source != "" {
+			query = query.Where("source = ?", source)
+		}
+	}
+	if err := query.Count(&count).Error; err != nil {
+		return 0, fmt.Errorf("count auth file recent usage events: %w", err)
+	}
+	return count, nil
+}
+
+func authFileRecentEventKeyPrefix(file cpa.AuthFile, bucketStart time.Time, failed bool) string {
+	stableIdentity := firstNonEmpty(file.AuthIndex, file.Email, file.Label, file.Name, "unknown")
+	sum := sha256.Sum256([]byte(stableIdentity))
+	return fmt.Sprintf("auth-files-recent:%s:%s:%t:", hex.EncodeToString(sum[:8]), bucketStart.UTC().Format("20060102T150405Z"), failed)
+}
+
+func parseAuthFileRecentRequestBucket(value string, nowLocal time.Time, location *time.Location) (time.Time, time.Time, bool) {
+	parts := strings.Split(strings.TrimSpace(value), "-")
+	if len(parts) != 2 {
+		return time.Time{}, time.Time{}, false
+	}
+	startHour, startMinute, ok := parseHourMinute(parts[0])
+	if !ok {
+		return time.Time{}, time.Time{}, false
+	}
+	endHour, endMinute, ok := parseHourMinute(parts[1])
+	if !ok {
+		return time.Time{}, time.Time{}, false
+	}
+	if location == nil {
+		location = time.UTC
+	}
+	start := time.Date(nowLocal.Year(), nowLocal.Month(), nowLocal.Day(), startHour, startMinute, 0, 0, location)
+	end := time.Date(nowLocal.Year(), nowLocal.Month(), nowLocal.Day(), endHour, endMinute, 0, 0, location)
+	if !end.After(start) {
+		end = end.Add(24 * time.Hour)
+	}
+	if start.After(nowLocal.Add(time.Minute)) {
+		start = start.Add(-24 * time.Hour)
+		end = end.Add(-24 * time.Hour)
+	}
+	return start, end, true
+}
+
+func parseHourMinute(value string) (int, int, bool) {
+	parts := strings.Split(strings.TrimSpace(value), ":")
+	if len(parts) != 2 {
+		return 0, 0, false
+	}
+	hour, err := strconv.Atoi(parts[0])
+	if err != nil || hour < 0 || hour > 23 {
+		return 0, 0, false
+	}
+	minute, err := strconv.Atoi(parts[1])
+	if err != nil || minute < 0 || minute > 59 {
+		return 0, 0, false
+	}
+	return hour, minute, true
 }
 
 func fetchProviderMetadata(ctx context.Context, fetcher MetadataFetcher) (cpa.ProviderMetadataConfig, []string, error) {

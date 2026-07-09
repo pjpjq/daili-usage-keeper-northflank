@@ -695,6 +695,106 @@ func TestSyncMetadataWritesAuthFilesToUsageIdentities(t *testing.T) {
 	assertTableNotExists(t, db, "auth_files")
 }
 
+func TestSyncMetadataBackfillsRecentAuthFileRequestBuckets(t *testing.T) {
+	db := openSyncTestDatabase(t)
+	now := time.Date(2026, 7, 9, 7, 55, 0, 0, time.UTC)
+	service := NewSyncServiceWithOptions(db, SyncServiceOptions{
+		BaseURL: "https://cpa.example.com",
+		Now:     func() time.Time { return now },
+		MetadataFetcher: stubMetadataFetcher{authFilesResult: &cpa.AuthFilesResult{StatusCode: 200, Payload: cpa.AuthFilesResponse{Files: []cpa.AuthFile{{
+			AuthIndex: "auth-recent",
+			Email:     "recent@example.com",
+			Type:      "codex",
+			Provider:  "Codex",
+			RecentRequests: []cpa.AuthFileRecentRequest{{
+				Time:    "15:40-15:50",
+				Success: 2,
+				Failed:  1,
+			}},
+		}}}}},
+	})
+
+	if err := service.SyncMetadata(context.Background()); err != nil {
+		t.Fatalf("SyncMetadata returned error: %v", err)
+	}
+	var events []models.UsageEvent
+	if err := db.Order("timestamp asc").Find(&events).Error; err != nil {
+		t.Fatalf("list usage events: %v", err)
+	}
+	if len(events) != 3 {
+		t.Fatalf("expected 3 synthetic recent usage events, got %d: %+v", len(events), events)
+	}
+	var successCount, failureCount int
+	for _, event := range events {
+		if event.APIGroupKey != authFileRecentAPIGroupKey || event.Model != authFileRecentModel || event.Source != "recent@example.com" || event.AuthIndex != "auth-recent" || event.AuthType != "oauth" || event.Provider != "Codex" {
+			t.Fatalf("unexpected synthetic event: %+v", event)
+		}
+		if event.Timestamp.Before(time.Date(2026, 7, 9, 7, 40, 0, 0, time.UTC)) || !event.Timestamp.Before(time.Date(2026, 7, 9, 7, 50, 0, 0, time.UTC)) {
+			t.Fatalf("synthetic event timestamp outside bucket: %+v", event)
+		}
+		if event.Failed {
+			failureCount++
+		} else {
+			successCount++
+		}
+	}
+	if successCount != 2 || failureCount != 1 {
+		t.Fatalf("expected success/failure counts 2/1, got %d/%d", successCount, failureCount)
+	}
+
+	if err := service.SyncMetadata(context.Background()); err != nil {
+		t.Fatalf("second SyncMetadata returned error: %v", err)
+	}
+	var count int64
+	if err := db.Model(&models.UsageEvent{}).Count(&count).Error; err != nil {
+		t.Fatalf("count usage events: %v", err)
+	}
+	if count != 3 {
+		t.Fatalf("expected second metadata sync to dedupe synthetic events, got count=%d", count)
+	}
+}
+
+func TestSyncMetadataRecentAuthFileBucketsOnlyAddsMissingDelta(t *testing.T) {
+	db := openSyncTestDatabase(t)
+	now := time.Date(2026, 7, 9, 7, 55, 0, 0, time.UTC)
+	if _, _, err := repository.InsertUsageEvents(db, []models.UsageEvent{{
+		EventKey:    "real-event",
+		APIGroupKey: "codex",
+		Model:       "gpt-5.5",
+		Timestamp:   time.Date(2026, 7, 9, 7, 45, 0, 0, time.UTC),
+		Source:      "recent@example.com",
+		AuthIndex:   "auth-recent",
+		AuthType:    "oauth",
+	}}); err != nil {
+		t.Fatalf("seed usage event: %v", err)
+	}
+	service := NewSyncServiceWithOptions(db, SyncServiceOptions{
+		BaseURL: "https://cpa.example.com",
+		Now:     func() time.Time { return now },
+		MetadataFetcher: stubMetadataFetcher{authFilesResult: &cpa.AuthFilesResult{StatusCode: 200, Payload: cpa.AuthFilesResponse{Files: []cpa.AuthFile{{
+			AuthIndex: "auth-recent",
+			Email:     "recent@example.com",
+			Type:      "codex",
+			Provider:  "Codex",
+			RecentRequests: []cpa.AuthFileRecentRequest{{
+				Time:    "15:40-15:50",
+				Success: 3,
+			}},
+		}}}}},
+	})
+
+	if err := service.SyncMetadata(context.Background()); err != nil {
+		t.Fatalf("SyncMetadata returned error: %v", err)
+	}
+	var count int64
+	if err := db.Model(&models.UsageEvent{}).Where("api_group_key = ?", authFileRecentAPIGroupKey).Count(&count).Error; err != nil {
+		t.Fatalf("count synthetic usage events: %v", err)
+	}
+	if count != 2 {
+		t.Fatalf("expected only missing synthetic delta to be inserted, got %d", count)
+	}
+}
+
 func TestSyncMetadataWritesProviderMetadataToUsageIdentities(t *testing.T) {
 	db := openSyncTestDatabase(t)
 	service := NewSyncServiceWithOptions(db, SyncServiceOptions{
