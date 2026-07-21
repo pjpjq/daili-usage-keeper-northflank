@@ -52,6 +52,9 @@ func TestNewWithConfigBuildsRedisDrainAndRouter(t *testing.T) {
 	if app.MetadataSync == nil {
 		t.Fatal("expected metadata sync runner to be initialized")
 	}
+	if app.PricingSync == nil {
+		t.Fatal("expected pricing sync runner to be initialized")
+	}
 }
 
 func TestNewWithConfigSkipsBackupRunnerWhenDisabled(t *testing.T) {
@@ -64,6 +67,19 @@ func TestNewWithConfigSkipsBackupRunnerWhenDisabled(t *testing.T) {
 	defer app.Close()
 	if app.BackupMaintenance != nil {
 		t.Fatal("expected database backup runner to be skipped when backups are disabled")
+	}
+}
+
+func TestNewWithConfigSkipsPricingSyncWhenDisabled(t *testing.T) {
+	cfg := testAppConfig(t)
+	cfg.PricingSyncEnabled = false
+	app, err := NewWithConfig(cfg)
+	if err != nil {
+		t.Fatalf("NewWithConfig returned error: %v", err)
+	}
+	defer app.Close()
+	if app.PricingSync != nil {
+		t.Fatal("expected pricing sync runner to be skipped when disabled")
 	}
 }
 
@@ -101,6 +117,7 @@ func TestRunStartsPollerAndMaintenanceIndependently(t *testing.T) {
 	pollerStarted := make(chan struct{})
 	maintenanceStarted := make(chan struct{})
 	metadataStarted := make(chan struct{})
+	pricingStarted := make(chan struct{})
 	backupStarted := make(chan struct{})
 	maintenance := NewStorageCleanupRunner(&maintenanceSyncStub{})
 	maintenance.sleep = func(context.Context, time.Duration) bool {
@@ -110,6 +127,11 @@ func TestRunStartsPollerAndMaintenanceIndependently(t *testing.T) {
 	metadataRunner := NewMetadataSyncRunner(&metadataSyncStub{}, time.Second)
 	metadataRunner.sleep = func(context.Context, time.Duration) bool {
 		close(metadataStarted)
+		return false
+	}
+	pricingRunner := NewPricingSyncRunner(&externalPricingSyncStub{}, time.Second)
+	pricingRunner.sleep = func(context.Context, time.Duration) bool {
+		close(pricingStarted)
 		return false
 	}
 	backupRunner := NewDatabaseBackupRunner(&databaseBackupWriterStub{}, nil, time.Second, 0)
@@ -123,6 +145,7 @@ func TestRunStartsPollerAndMaintenanceIndependently(t *testing.T) {
 		Poller:            &appRunStub{started: pollerStarted},
 		Maintenance:       maintenance,
 		MetadataSync:      metadataRunner,
+		PricingSync:       pricingRunner,
 		BackupMaintenance: backupRunner,
 	}
 
@@ -143,6 +166,11 @@ func TestRunStartsPollerAndMaintenanceIndependently(t *testing.T) {
 	case <-metadataStarted:
 	case <-time.After(time.Second):
 		t.Fatal("expected metadata sync runner to start")
+	}
+	select {
+	case <-pricingStarted:
+	case <-time.After(time.Second):
+		t.Fatal("expected pricing sync runner to start")
 	}
 	select {
 	case <-backupStarted:
@@ -227,6 +255,9 @@ func testAppConfig(t *testing.T) config.Config {
 		RedisQueueIdleInterval: time.Second,
 		RedisQueueErrorBackoff: 10 * time.Second,
 		MetadataSyncInterval:   30 * time.Second,
+		PricingSyncEnabled:     true,
+		PricingSyncInterval:    6 * time.Hour,
+		PricingSourceURL:       config.PricingSourceURLDefault,
 		SQLitePath:             t.TempDir() + "/app.db",
 		BackupEnabled:          true,
 		BackupDir:              t.TempDir() + "/backups",

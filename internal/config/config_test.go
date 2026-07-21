@@ -15,7 +15,8 @@ var configEnvKeys = []string{
 	"USAGE_SYNC_MODE", "REDIS_QUEUE_ADDR", "REDIS_QUEUE_BATCH_SIZE", "REDIS_QUEUE_IDLE_INTERVAL",
 	"SQLITE_PATH", "BACKUP_ENABLED", "BACKUP_DIR", "BACKUP_INTERVAL", "BACKUP_RETENTION_DAYS",
 	"REQUEST_TIMEOUT", "LOG_LEVEL", "LOG_FILE_ENABLED", "LOG_DIR", "LOG_RETENTION_DAYS",
-	"AUTH_ENABLED", "LOGIN_PASSWORD", "AUTH_SESSION_TTL", "TZ",
+	"AUTH_ENABLED", "LOGIN_PASSWORD", "AUTH_SESSION_TTL", "TZ", "PRICING_SYNC_ENABLED",
+	"PRICING_SYNC_INTERVAL", "PRICING_SOURCE_URL",
 }
 
 func TestMain(m *testing.M) {
@@ -143,6 +144,9 @@ func TestLoadFromEnvAppliesDefaults(t *testing.T) {
 	}
 	if cfg.MetadataSyncInterval != MetadataSyncIntervalDefault {
 		t.Fatalf("expected default metadata sync interval 30s, got %s", cfg.MetadataSyncInterval)
+	}
+	if !cfg.PricingSyncEnabled || cfg.PricingSyncInterval != PricingSyncIntervalDefault || cfg.PricingSourceURL != PricingSourceURLDefault {
+		t.Fatalf("unexpected default pricing sync config: enabled=%v interval=%s source=%q", cfg.PricingSyncEnabled, cfg.PricingSyncInterval, cfg.PricingSourceURL)
 	}
 	if !cfg.LogFileEnabled {
 		t.Fatal("expected log file output to be enabled by default")
@@ -435,14 +439,28 @@ func TestLoadFromEnvParsesOverrides(t *testing.T) {
 	t.Setenv("LOGIN_PASSWORD", "top-secret")
 	t.Setenv("AUTH_SESSION_TTL", "12h")
 	t.Setenv("REDIS_QUEUE_IDLE_INTERVAL", "2s")
+	t.Setenv("PRICING_SYNC_ENABLED", "false")
+	t.Setenv("PRICING_SYNC_INTERVAL", "12h")
+	t.Setenv("PRICING_SOURCE_URL", "https://pricing.example.com/api.json")
 
 	cfg, err := LoadFromEnv()
 	if err != nil {
 		t.Fatalf("LoadFromEnv returned error: %v", err)
 	}
 
-	if cfg.AppPort != "9090" || cfg.AppBasePath != "/cpa" || cfg.WorkDir != "/tmp/work" || cfg.SQLitePath != filepath.Join("/tmp/work", "app.db") || cfg.BackupEnabled || cfg.BackupDir != filepath.Join("/tmp/work", "backups") || cfg.BackupInterval != 2*time.Hour || cfg.BackupRetentionDays != 7 || cfg.RequestTimeout != 15*time.Second || cfg.LogLevel != "debug" || cfg.LogFileEnabled || cfg.LogDir != filepath.Join("/tmp/work", "logs") || cfg.LogRetentionDays != 14 || !cfg.AuthEnabled || cfg.LoginPassword != "top-secret" || cfg.AuthSessionTTL != 12*time.Hour || cfg.RedisQueueIdleInterval != 2*time.Second {
+	if cfg.AppPort != "9090" || cfg.AppBasePath != "/cpa" || cfg.WorkDir != "/tmp/work" || cfg.SQLitePath != filepath.Join("/tmp/work", "app.db") || cfg.BackupEnabled || cfg.BackupDir != filepath.Join("/tmp/work", "backups") || cfg.BackupInterval != 2*time.Hour || cfg.BackupRetentionDays != 7 || cfg.RequestTimeout != 15*time.Second || cfg.LogLevel != "debug" || cfg.LogFileEnabled || cfg.LogDir != filepath.Join("/tmp/work", "logs") || cfg.LogRetentionDays != 14 || !cfg.AuthEnabled || cfg.LoginPassword != "top-secret" || cfg.AuthSessionTTL != 12*time.Hour || cfg.RedisQueueIdleInterval != 2*time.Second || cfg.PricingSyncEnabled || cfg.PricingSyncInterval != 12*time.Hour || cfg.PricingSourceURL != "https://pricing.example.com/api.json" {
 		t.Fatalf("unexpected config override result: %+v", cfg)
+	}
+}
+
+func TestLoadFromEnvRejectsNonPositivePricingSyncInterval(t *testing.T) {
+	t.Setenv("CPA_BASE_URL", "http://127.0.0.1:"+cpa.ManagementRedisDefaultPort)
+	t.Setenv("CPA_MANAGEMENT_KEY", "secret")
+	t.Setenv("PRICING_SYNC_INTERVAL", "0s")
+
+	_, err := LoadFromEnv()
+	if err == nil || err.Error() != "PRICING_SYNC_INTERVAL must be positive" {
+		t.Fatalf("expected PRICING_SYNC_INTERVAL validation error, got %v", err)
 	}
 }
 

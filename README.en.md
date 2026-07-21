@@ -12,6 +12,7 @@ It relies on [CLIProxyAPI (CPA)](https://github.com/router-for-me/CLIProxyAPI) a
 
 - CPA usage persistence in SQLite
 - Aggregated usage and pricing APIs
+- Current CPA model pricing sync from models.dev at startup and every 6 hours (configurable, fail-open)
 - Built-in React dashboard
 - Optional password login protection
 - Local SQLite database backups with retention
@@ -56,6 +57,9 @@ cp .env.example .env
 | `REDIS_QUEUE_BATCH_SIZE` | No | `1000` | Maximum queue records per pull |
 | `REDIS_QUEUE_IDLE_INTERVAL` | No | `1s` | Empty queue check interval |
 | `REQUEST_TIMEOUT` | No | `30s` | CPA request timeout |
+| `PRICING_SYNC_ENABLED` | No | `true` | Enable scheduled third-party model pricing sync |
+| `PRICING_SYNC_INTERVAL` | No | `6h` | Model pricing sync interval |
+| `PRICING_SOURCE_URL` | No | `https://models.dev/api.json` | Third-party model pricing catalog |
 | `WORK_DIR` | No | `./data` | Application work directory; database, logs, and backups default to `app.db`, `logs/`, and `backups/` under it |
 | `LOG_LEVEL` | No | `info` | Log level |
 | `LOG_FILE_ENABLED` | No | `true` | Write persistent log files |

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"sync"
 
 	"cpa-usage-keeper/internal/api"
@@ -38,6 +39,7 @@ type App struct {
 	Poller            Runner
 	Maintenance       *StorageCleanupRunner
 	MetadataSync      *MetadataSyncRunner
+	PricingSync       *PricingSyncRunner
 	BackupMaintenance *DatabaseBackupRunner
 	LogCloser         io.Closer
 
@@ -91,6 +93,18 @@ func NewWithConfig(cfg config.Config) (*App, error) {
 	usageIdentityService := service.NewUsageIdentityService(db)
 	pricingModelsClient := cpa.NewClient(cfg.CPABaseURL, cfg.CPAManagementKey, cfg.RequestTimeout)
 	pricingService := service.NewPricingService(db, pricingModelsClient)
+	var pricingSync *PricingSyncRunner
+	if cfg.PricingSyncEnabled {
+		pricingSync = NewPricingSyncRunner(
+			service.NewExternalPricingSyncer(
+				db,
+				pricingModelsClient,
+				&http.Client{Timeout: cfg.RequestTimeout},
+				cfg.PricingSourceURL,
+			),
+			cfg.PricingSyncInterval,
+		)
+	}
 	sessionManager := auth.NewSessionManager(cfg.AuthSessionTTL)
 	authHandler := api.NewAuthHandler(api.AuthConfig{
 		Enabled:       cfg.AuthEnabled,
@@ -105,6 +119,7 @@ func NewWithConfig(cfg config.Config) (*App, error) {
 		Poller:            backgroundPoller,
 		Maintenance:       NewStorageCleanupRunner(syncService),
 		MetadataSync:      NewMetadataSyncRunner(syncService, cfg.MetadataSyncInterval),
+		PricingSync:       pricingSync,
 		BackupMaintenance: backupMaintenance,
 		LogCloser:         logCloser,
 		Router: api.NewRouter(
@@ -180,6 +195,13 @@ func (a *App) Run() error {
 		a.startBackgroundTask(func() {
 			if err := a.MetadataSync.Run(ctx); err != nil {
 				logrus.Errorf("metadata sync stopped: %v", err)
+			}
+		})
+	}
+	if a.PricingSync != nil {
+		a.startBackgroundTask(func() {
+			if err := a.PricingSync.Run(ctx); err != nil {
+				logrus.Errorf("pricing sync stopped: %v", err)
 			}
 		})
 	}

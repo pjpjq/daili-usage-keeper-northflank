@@ -19,6 +19,8 @@ const (
 	RedisQueueKeyDefault          = cpa.ManagementUsageQueueKey
 	RedisQueueErrorBackoffDefault = 10 * time.Second
 	MetadataSyncIntervalDefault   = 30 * time.Second
+	PricingSyncIntervalDefault    = 6 * time.Hour
+	PricingSourceURLDefault       = "https://models.dev/api.json"
 )
 
 var (
@@ -52,6 +54,12 @@ type Config struct {
 	RedisQueueErrorBackoff time.Duration
 	// MetadataSyncInterval 是 auth files 和 provider metadata 的固定刷新间隔。
 	MetadataSyncInterval time.Duration
+	// PricingSyncEnabled 控制是否定时从第三方服务同步当前模型价格。
+	PricingSyncEnabled bool
+	// PricingSyncInterval 是两次第三方价格同步之间的固定间隔。
+	PricingSyncInterval time.Duration
+	// PricingSourceURL 是第三方模型定价目录地址。
+	PricingSourceURL string
 	// WorkDir 是应用工作目录，数据库、日志和备份默认从这里派生。
 	WorkDir string
 	// SQLitePath 是 SQLite 数据库文件路径。
@@ -128,6 +136,18 @@ func Load(options LoadOptions) (*Config, error) {
 		return nil, err
 	}
 
+	pricingSyncEnabled, err := getBool("PRICING_SYNC_ENABLED", true)
+	if err != nil {
+		return nil, err
+	}
+	pricingSyncInterval, err := getDuration("PRICING_SYNC_INTERVAL", PricingSyncIntervalDefault)
+	if err != nil {
+		return nil, err
+	}
+	if pricingSyncInterval <= 0 {
+		return nil, fmt.Errorf("PRICING_SYNC_INTERVAL must be positive")
+	}
+
 	backupEnabled, err := getBool("BACKUP_ENABLED", true)
 	if err != nil {
 		return nil, err
@@ -192,6 +212,9 @@ func Load(options LoadOptions) (*Config, error) {
 		RedisQueueIdleInterval: redisQueueIdleInterval,
 		RedisQueueErrorBackoff: RedisQueueErrorBackoffDefault,
 		MetadataSyncInterval:   MetadataSyncIntervalDefault,
+		PricingSyncEnabled:     pricingSyncEnabled,
+		PricingSyncInterval:    pricingSyncInterval,
+		PricingSourceURL:       getString("PRICING_SOURCE_URL", PricingSourceURLDefault),
 		WorkDir:                workDir,
 		SQLitePath:             filepath.Join(workDir, workDirDatabaseName),
 		BackupEnabled:          backupEnabled,

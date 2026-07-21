@@ -22,6 +22,7 @@ pinned: false
 
 - CPA usage 数据持久化到 SQLite
 - usage 聚合 API 与 pricing API
+- 启动时及每 6 小时从 models.dev 同步当前 CPA 模型价格（可配置，失败保留旧价格）
 - 内置 React Dashboard
 - 可选密码登录保护
 - SQLite 数据库本地备份与保留策略
@@ -66,6 +67,9 @@ cp .env.example .env
 | `REDIS_QUEUE_BATCH_SIZE` | 否 | `1000` | 每次最多拉取的队列记录数 |
 | `REDIS_QUEUE_IDLE_INTERVAL` | 否 | `1s` | 队列为空时的检查间隔 |
 | `REQUEST_TIMEOUT` | 否 | `30s` | CPA 请求超时 |
+| `PRICING_SYNC_ENABLED` | 否 | `true` | 是否启用第三方模型价格定时同步 |
+| `PRICING_SYNC_INTERVAL` | 否 | `6h` | 模型价格同步间隔 |
+| `PRICING_SOURCE_URL` | 否 | `https://models.dev/api.json` | 第三方模型价格目录 |
 | `WORK_DIR` | 否 | `./data` | 应用工作目录；数据库、日志和备份默认分别写入 `app.db`、`logs/`、`backups/` |
 | `LOG_LEVEL` | 否 | `info` | 日志级别 |
 | `LOG_FILE_ENABLED` | 否 | `true` | 是否写入持久化日志文件 |
