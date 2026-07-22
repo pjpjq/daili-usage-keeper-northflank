@@ -2,6 +2,8 @@ package service
 
 import (
 	"context"
+	"sync"
+	"time"
 
 	"cpa-usage-keeper/internal/cpa"
 	"cpa-usage-keeper/internal/repository"
@@ -9,11 +11,26 @@ import (
 )
 
 type usageService struct {
-	db *gorm.DB
+	db               *gorm.DB
+	overviewAllCache usageOverviewCache
+	buildOverview    func(UsageFilter) (*UsageOverviewSnapshot, error)
+	now              func() time.Time
+}
+
+const usageOverviewCacheTTL = 60 * time.Second
+
+type usageOverviewCache struct {
+	mu          sync.Mutex
+	value       *UsageOverviewSnapshot
+	refreshedAt time.Time
+	refreshing  bool
+	ready       chan struct{}
 }
 
 func NewUsageService(db *gorm.DB) UsageProvider {
-	return &usageService{db: db}
+	service := &usageService{db: db, now: time.Now}
+	service.buildOverview = service.buildUsageOverviewFromRepository
+	return service
 }
 
 func (s *usageService) GetUsageWithFilter(_ context.Context, filter UsageFilter) (*cpa.StatisticsSnapshot, error) {
@@ -25,6 +42,70 @@ func (s *usageService) GetUsageWithFilter(_ context.Context, filter UsageFilter)
 }
 
 func (s *usageService) GetUsageOverview(_ context.Context, filter UsageFilter) (*UsageOverviewSnapshot, error) {
+	if filter.Range != "all" || filter.StartTime != nil || filter.EndTime != nil {
+		return s.buildOverview(filter)
+	}
+
+	cache := &s.overviewAllCache
+	cache.mu.Lock()
+	for {
+		if cache.value != nil {
+			value := cache.value
+			if s.now().Before(cache.refreshedAt.Add(usageOverviewCacheTTL)) {
+				cache.mu.Unlock()
+				return value, nil
+			}
+			if !cache.refreshing {
+				cache.refreshing = true
+				cache.ready = make(chan struct{})
+				go s.refreshUsageOverviewAll()
+			}
+			cache.mu.Unlock()
+			return value, nil
+		}
+
+		if cache.refreshing {
+			ready := cache.ready
+			cache.mu.Unlock()
+			<-ready
+			cache.mu.Lock()
+			continue
+		}
+
+		cache.refreshing = true
+		cache.ready = make(chan struct{})
+		cache.mu.Unlock()
+
+		value, err := s.buildOverview(filter)
+		cache.mu.Lock()
+		if err == nil {
+			cache.value = value
+			cache.refreshedAt = s.now()
+		}
+		cache.refreshing = false
+		close(cache.ready)
+		cache.ready = nil
+		cache.mu.Unlock()
+		return value, err
+	}
+}
+
+func (s *usageService) refreshUsageOverviewAll() {
+	value, err := s.buildOverview(UsageFilter{Range: "all"})
+
+	cache := &s.overviewAllCache
+	cache.mu.Lock()
+	if err == nil {
+		cache.value = value
+		cache.refreshedAt = s.now()
+	}
+	cache.refreshing = false
+	close(cache.ready)
+	cache.ready = nil
+	cache.mu.Unlock()
+}
+
+func (s *usageService) buildUsageOverviewFromRepository(filter UsageFilter) (*UsageOverviewSnapshot, error) {
 	overview, err := repository.BuildUsageOverviewWithFilter(s.db, repository.UsageQueryFilter{
 		Range:     filter.Range,
 		StartTime: filter.StartTime,
