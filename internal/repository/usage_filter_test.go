@@ -591,6 +591,42 @@ func TestBuildUsageOverviewWithFilterBuildsLatestHourlySeriesForLongRanges(t *te
 	}
 }
 
+func TestBuildUsageOverviewWithFilterCapsAllRangeHourlySeriesAtLatest24Hours(t *testing.T) {
+	withRepositoryTestLocation(t, "Asia/Shanghai")
+	db, err := OpenDatabase(config.Config{SQLitePath: filepath.Join(t.TempDir(), "usage-overview-all-hourly-series.db")})
+	if err != nil {
+		t.Fatalf("OpenDatabase returned error: %v", err)
+	}
+	closeTestDatabase(t, db)
+
+	events := []models.UsageEvent{
+		{EventKey: "event-old", APIGroupKey: "provider-a", Model: "claude-sonnet", Timestamp: time.Date(2026, 4, 17, 8, 0, 0, 0, time.UTC), TotalTokens: 10},
+		{EventKey: "event-window-start", APIGroupKey: "provider-a", Model: "claude-sonnet", Timestamp: time.Date(2026, 4, 23, 0, 15, 0, 0, time.UTC), TotalTokens: 20},
+		{EventKey: "event-latest", APIGroupKey: "provider-a", Model: "claude-sonnet", Timestamp: time.Date(2026, 4, 23, 23, 45, 0, 0, time.UTC), TotalTokens: 30},
+	}
+	if _, _, err := InsertUsageEvents(db, events); err != nil {
+		t.Fatalf("InsertUsageEvents returned error: %v", err)
+	}
+
+	overview, err := BuildUsageOverviewWithFilter(db, UsageQueryFilter{Range: "all"})
+	if err != nil {
+		t.Fatalf("BuildUsageOverviewWithFilter returned error: %v", err)
+	}
+
+	if _, ok := overview.HourlySeries.Requests["2026-04-17T08:00:00Z"]; ok {
+		t.Fatalf("expected all-range hourly series to exclude buckets before the latest 24 hours, got %+v", overview.HourlySeries.Requests)
+	}
+	if overview.HourlySeries.Requests["2026-04-23T00:00:00Z"] != 1 || overview.HourlySeries.Requests["2026-04-23T23:00:00Z"] != 1 {
+		t.Fatalf("unexpected all-range latest hourly request series: %+v", overview.HourlySeries.Requests)
+	}
+	if overview.Series.Requests["2026-04-17"] != 1 || overview.Series.Requests["2026-04-23"] != 1 || overview.Series.Requests["2026-04-24"] != 1 {
+		t.Fatalf("expected all-range primary series to retain full daily history, got %+v", overview.Series.Requests)
+	}
+	if overview.Summary.RequestCount != 3 || overview.Summary.TokenCount != 60 {
+		t.Fatalf("expected all-range summary to retain all events, got %+v", overview.Summary)
+	}
+}
+
 func TestBuildUsageOverviewWithFilterUsesDailyBucketsForLongCustomRanges(t *testing.T) {
 	withRepositoryTestLocation(t, "Asia/Shanghai")
 	db, err := OpenDatabase(config.Config{SQLitePath: filepath.Join(t.TempDir(), "usage-overview-custom-buckets.db")})

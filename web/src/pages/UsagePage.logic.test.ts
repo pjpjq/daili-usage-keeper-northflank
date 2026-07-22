@@ -96,14 +96,14 @@ describe('UsagePage Overview loading display', () => {
 });
 
 describe('UsagePage Overview auto-refresh', () => {
-  it('refreshes the Overview tab every 10 seconds', () => {
+  it('refreshes the Overview tab every 60 seconds', () => {
     vi.useFakeTimers();
     const testDocument = createAutoRefreshTestDocument();
     const refreshOverview = vi.fn();
 
     const cleanup = scheduleOverviewAutoRefresh({ enabled: true, refreshOverview, documentRef: testDocument });
 
-    vi.advanceTimersByTime(9_999);
+    vi.advanceTimersByTime(59_999);
     expect(refreshOverview).not.toHaveBeenCalled();
 
     vi.advanceTimersByTime(1);
@@ -118,7 +118,7 @@ describe('UsagePage Overview auto-refresh', () => {
 
     const cleanup = scheduleOverviewAutoRefresh({ enabled: false, refreshOverview });
 
-    vi.advanceTimersByTime(10_000);
+    vi.advanceTimersByTime(60_000);
     expect(refreshOverview).not.toHaveBeenCalled();
 
     cleanup();
@@ -131,7 +131,7 @@ describe('UsagePage Overview auto-refresh', () => {
 
     const cleanup = scheduleOverviewAutoRefresh({ enabled: true, refreshOverview, documentRef: testDocument });
 
-    vi.advanceTimersByTime(10_000);
+    vi.advanceTimersByTime(60_000);
     expect(refreshOverview).not.toHaveBeenCalled();
 
     cleanup();
@@ -157,7 +157,7 @@ describe('UsagePage Overview auto-refresh', () => {
     const refreshOverview = vi.fn();
 
     const cleanup = scheduleOverviewAutoRefresh({ enabled: true, refreshOverview, documentRef: testDocument });
-    vi.advanceTimersByTime(9_999);
+    vi.advanceTimersByTime(59_999);
     testDocument.setVisibilityState('visible');
     testDocument.dispatchEvent(new Event('visibilitychange'));
 
@@ -166,7 +166,7 @@ describe('UsagePage Overview auto-refresh', () => {
     vi.advanceTimersByTime(1);
     expect(refreshOverview).toHaveBeenCalledTimes(1);
 
-    vi.advanceTimersByTime(9_999);
+    vi.advanceTimersByTime(59_999);
     expect(refreshOverview).toHaveBeenCalledTimes(2);
 
     cleanup();
@@ -179,7 +179,7 @@ describe('UsagePage Overview auto-refresh', () => {
     const cleanup = scheduleOverviewAutoRefresh({ enabled: true, refreshOverview, documentRef: testDocument });
 
     cleanup();
-    vi.advanceTimersByTime(10_000);
+    vi.advanceTimersByTime(60_000);
     testDocument.dispatchEvent(new Event('visibilitychange'));
 
     expect(refreshOverview).not.toHaveBeenCalled();

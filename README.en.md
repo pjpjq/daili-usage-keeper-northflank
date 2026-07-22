@@ -56,6 +56,7 @@ cp .env.example .env
 | `REDIS_QUEUE_ADDR` | No | `CPA_BASE_URL` hostname + `8317` | CPA Redis/RESP TCP address; set `host:port` for non-default ports |
 | `REDIS_QUEUE_BATCH_SIZE` | No | `1000` | Maximum queue records per pull |
 | `REDIS_QUEUE_IDLE_INTERVAL` | No | `1s` | Empty queue check interval |
+| `METADATA_SYNC_INTERVAL` | No | `30s` | Auth-file and provider metadata refresh interval |
 | `REQUEST_TIMEOUT` | No | `30s` | CPA request timeout |
 | `PRICING_SYNC_ENABLED` | No | `true` | Enable scheduled third-party model pricing sync |
 | `PRICING_SYNC_INTERVAL` | No | `6h` | Model pricing sync interval |

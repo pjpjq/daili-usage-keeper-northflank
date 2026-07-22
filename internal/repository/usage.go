@@ -318,7 +318,7 @@ func BuildUsageOverviewWithFilter(db *gorm.DB, filter UsageQueryFilter) (*UsageO
 		return nil, fmt.Errorf("database is nil")
 	}
 
-	events, err := loadUsageEventsWithFilter(db, filter)
+	events, err := loadUsageOverviewEventsWithFilter(db, filter)
 	if err != nil {
 		return nil, err
 	}
@@ -333,7 +333,7 @@ func BuildUsageOverviewWithFilter(db *gorm.DB, filter UsageQueryFilter) (*UsageO
 func buildUsageOverviewFromEvents(events []models.UsageEvent, filter UsageQueryFilter, pricingByModel map[string]models.ModelPriceSetting) *UsageOverviewRecord {
 	windowMinutes := computeWindowMinutes(filter)
 	bucketByDay := shouldBucketUsageOverviewByDay(filter, windowMinutes)
-	latestHourlyStart := latestHourlySeriesStart(filter)
+	latestHourlyStart := latestHourlySeriesStart(filter, events)
 	overview := &UsageOverviewRecord{
 		Usage: &cpa.StatisticsSnapshot{
 			APIs:           map[string]cpa.APISnapshot{},
@@ -369,6 +369,18 @@ func loadUsageEventsWithFilter(db *gorm.DB, filter UsageQueryFilter) ([]models.U
 	var events []models.UsageEvent
 	if err := query.Find(&events).Error; err != nil {
 		return nil, fmt.Errorf("load usage events: %w", err)
+	}
+	return events, nil
+}
+
+func loadUsageOverviewEventsWithFilter(db *gorm.DB, filter UsageQueryFilter) ([]models.UsageEvent, error) {
+	query := applyUsageEventsListFilter(db.Model(&models.UsageEvent{}), filter).
+		Select("api_group_key", "model", "timestamp", "failed", "input_tokens", "output_tokens", "reasoning_tokens", "cached_tokens", "total_tokens").
+		Order("timestamp asc")
+
+	var events []models.UsageEvent
+	if err := query.Find(&events).Error; err != nil {
+		return nil, fmt.Errorf("load usage overview events: %w", err)
 	}
 	return events, nil
 }
@@ -626,11 +638,16 @@ func usageOverviewBucket(timestamp time.Time, byDay bool) (string, int64) {
 	return timestamp.UTC().Format("2006-01-02T15:00:00Z"), 60
 }
 
-func latestHourlySeriesStart(filter UsageQueryFilter) *time.Time {
-	if filter.EndTime == nil {
+func latestHourlySeriesStart(filter UsageQueryFilter, events []models.UsageEvent) *time.Time {
+	var end time.Time
+	if filter.EndTime != nil {
+		end = filter.EndTime.UTC()
+	} else if len(events) > 0 {
+		end = events[len(events)-1].Timestamp.UTC()
+	} else {
 		return nil
 	}
-	currentHour := filter.EndTime.UTC().Truncate(time.Hour)
+	currentHour := end.Truncate(time.Hour)
 	start := currentHour.Add(-23 * time.Hour)
 	return &start
 }
@@ -697,21 +714,31 @@ func usageOverviewHealthWindow(filter UsageQueryFilter, totalBlocks int, span ti
 }
 
 func updateUsageOverviewHealthBlock(blocks []UsageOverviewHealthBlockRecord, event models.UsageEvent) {
-	timestamp := event.Timestamp.UTC()
-	for index := range blocks {
-		block := &blocks[index]
-		if timestamp.Before(block.StartTime) || !timestamp.Before(block.EndTime) {
-			continue
-		}
-		if event.Failed {
-			block.Failure++
-		} else {
-			block.Success++
-		}
-		total := block.Success + block.Failure
-		if total > 0 {
-			block.Rate = float64(block.Success) / float64(total)
-		}
+	if len(blocks) == 0 {
 		return
+	}
+	timestamp := event.Timestamp.UTC()
+	windowStart := blocks[0].StartTime
+	windowEnd := blocks[len(blocks)-1].EndTime
+	if timestamp.Before(windowStart) || !timestamp.Before(windowEnd) {
+		return
+	}
+	span := blocks[0].EndTime.Sub(windowStart)
+	if span <= 0 {
+		return
+	}
+	index := int(timestamp.Sub(windowStart) / span)
+	if index < 0 || index >= len(blocks) {
+		return
+	}
+	block := &blocks[index]
+	if event.Failed {
+		block.Failure++
+	} else {
+		block.Success++
+	}
+	total := block.Success + block.Failure
+	if total > 0 {
+		block.Rate = float64(block.Success) / float64(total)
 	}
 }

@@ -130,6 +130,13 @@ func Load(options LoadOptions) (*Config, error) {
 	if redisQueueIdleInterval <= 0 {
 		return nil, fmt.Errorf("REDIS_QUEUE_IDLE_INTERVAL must be positive")
 	}
+	metadataSyncInterval, err := getDuration("METADATA_SYNC_INTERVAL", MetadataSyncIntervalDefault)
+	if err != nil {
+		return nil, err
+	}
+	if metadataSyncInterval <= 0 {
+		return nil, fmt.Errorf("METADATA_SYNC_INTERVAL must be positive")
+	}
 
 	requestTimeout, err := getDuration("REQUEST_TIMEOUT", 30*time.Second)
 	if err != nil {
@@ -211,7 +218,7 @@ func Load(options LoadOptions) (*Config, error) {
 		RedisQueueBatchSize:    redisQueueBatchSize,
 		RedisQueueIdleInterval: redisQueueIdleInterval,
 		RedisQueueErrorBackoff: RedisQueueErrorBackoffDefault,
-		MetadataSyncInterval:   MetadataSyncIntervalDefault,
+		MetadataSyncInterval:   metadataSyncInterval,
 		PricingSyncEnabled:     pricingSyncEnabled,
 		PricingSyncInterval:    pricingSyncInterval,
 		PricingSourceURL:       getString("PRICING_SOURCE_URL", PricingSourceURLDefault),

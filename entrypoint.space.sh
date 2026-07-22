@@ -7,6 +7,8 @@ export CPA_BASE_URL="${CPA_BASE_URL:-https://pjpjq-daili.hf.space}"
 # Cross-Space raw TCP/RESP is not reachable; force a fast failed TCP attempt so
 # cpa-usage-keeper immediately falls back to CPA /v0/management/usage-queue.
 export REDIS_QUEUE_ADDR="${REDIS_QUEUE_ADDR:-127.0.0.1:9}"
+export REDIS_QUEUE_IDLE_INTERVAL="${REDIS_QUEUE_IDLE_INTERVAL:-3s}"
+export METADATA_SYNC_INTERVAL="${METADATA_SYNC_INTERVAL:-5m}"
 export WORK_DIR="${WORK_DIR:-/data}"
 export TZ="${TZ:-Asia/Shanghai}"
 export AUTH_ENABLED="${AUTH_ENABLED:-true}"
@@ -17,6 +19,24 @@ export KEEPER_HF_ROTATE_INTERVAL="${KEEPER_HF_ROTATE_INTERVAL:-60}"
 export KEEPER_HF_ROTATE_KEEP="${KEEPER_HF_ROTATE_KEEP:-48}"
 export KEEPER_HF_WRITE_LATEST="${KEEPER_HF_WRITE_LATEST:-0}"
 export KEEPER_HF_UPLOAD_INTERVAL="${KEEPER_HF_UPLOAD_INTERVAL:-60}"
+
+# The Northflank free runtime has only a fraction of a shared CPU. A full
+# SQLite backup, checksum and LFS upload every minute can starve HTTP requests,
+# so keep the requested cadence elsewhere but enforce a conservative floor on
+# the free Northflank plans.
+case "${NF_PLAN_ID:-}" in
+  nf-compute-10|nf-compute-20)
+    case "$KEEPER_HF_UPLOAD_INTERVAL" in
+      ''|*[!0-9]*) KEEPER_HF_UPLOAD_INTERVAL=900 ;;
+      *)
+        if [ "$KEEPER_HF_UPLOAD_INTERVAL" -lt 900 ]; then
+          KEEPER_HF_UPLOAD_INTERVAL=900
+        fi
+        ;;
+    esac
+    export KEEPER_HF_UPLOAD_INTERVAL
+    ;;
+esac
 
 missing=""
 [ -n "${CPA_MANAGEMENT_KEY:-}" ] || missing="$missing CPA_MANAGEMENT_KEY"

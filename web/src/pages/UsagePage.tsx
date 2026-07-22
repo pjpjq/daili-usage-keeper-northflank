@@ -107,7 +107,7 @@ const USAGE_TAB_STORAGE_KEY = 'cli-proxy-usage-tab-v1';
 const REQUEST_EVENTS_PAGE_SIZES = [20, 50, 100, 500, 1000] as const;
 const REQUEST_EVENTS_DEFAULT_PAGE_SIZE = 100;
 const ALL_REQUEST_EVENTS_FILTER = '__all__';
-const OVERVIEW_AUTO_REFRESH_INTERVAL_MS = 10_000;
+const OVERVIEW_AUTO_REFRESH_INTERVAL_MS = 60_000;
 
 type RequestEventFilterState = {
   model: string;
