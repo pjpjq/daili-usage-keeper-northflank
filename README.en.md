@@ -1,10 +1,10 @@
-# CPA Usage Keeper
+# Daili Usage Keeper
 
 [中文说明](./README.md)
 
-CPA Usage Keeper is a standalone CPA usage persistence and dashboard service.
+Daili Usage Keeper is a standalone usage persistence and dashboard service. This Space only serves a password-protected statistics dashboard; it does not provide model inference, API proxying, or request relay endpoints.
 
-It relies on [CLIProxyAPI (CPA)](https://github.com/router-for-me/CLIProxyAPI) as the backend CPA data source and adds persistent storage and statistical analysis capabilities on top of CPA. The service consumes events from the CPA Redis usage queue into SQLite, periodically pulls CPA metadata, exposes aggregation APIs, and serves a built-in web dashboard for usage, pricing, request health, and model/API statistics.
+The Space image builds the Go and React application directly from the source in this repository and uses a standard Alpine runtime image. It imports usage data from a separately configured management metadata endpoint, stores it in SQLite, and serves statistics for usage, pricing, request health, models, and APIs.
 
 ![cpa-usage-keeper-screenshot](https://images.bitskyline.com/i/2026/05/1pmg6l.png)
 
@@ -153,65 +153,6 @@ docker run -d \
 ```
 
 `/data` stores the SQLite database, backups, and log files. Mount it to persistent storage.
-
-## Docker Compose
-
-The repository includes a minimal `docker-compose.yaml` example for running CPA and CPA Usage Keeper together:
-
-```yaml
-services:
-  cli-proxy-api:
-    image: eceasy/cli-proxy-api:latest
-    container_name: cli-proxy-api
-    restart: unless-stopped
-    ports:
-      - "8317:8317"
-      - "1455:1455"
-    volumes:
-      - ./cpa/config.yaml:/CLIProxyAPI/config.yaml
-      - ./cpa/auths:/root/.cli-proxy-api
-      - ./cpa/logs:/CLIProxyAPI/logs
-    networks:
-      - cpa-network
-
-  cpa-usage-keeper:
-    image: ghcr.io/willxup/cpa-usage-keeper:latest
-    container_name: cpa-usage-keeper
-    restart: unless-stopped
-    depends_on:
-      - cli-proxy-api
-    ports:
-      - "8080:8080"
-    environment:
-      TZ: Asia/Shanghai # Sets the container timezone; log timestamps use this timezone.
-      CPA_BASE_URL: http://cli-proxy-api:8317
-      CPA_MANAGEMENT_KEY: replace-with-your-management-key
-      REDIS_QUEUE_ADDR: cli-proxy-api:8317
-      AUTH_ENABLED: true
-      LOGIN_PASSWORD: replace-with-your-login-password
-    volumes:
-      - ./keeper:/data
-    networks:
-      - cpa-network
-
-networks:
-  cpa-network:
-    driver: bridge
-```
-
-Start:
-
-```bash
-docker compose up -d
-```
-
-Stop:
-
-```bash
-docker compose down
-```
-
-CPA files are stored under `./cpa`, and CPA Usage Keeper data is stored under `./keeper`.
 
 ## Subpath reverse proxy
 

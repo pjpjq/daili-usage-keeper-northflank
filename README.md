@@ -8,13 +8,13 @@ app_port: 8080
 pinned: false
 ---
 
-# CPA Usage Keeper
+# Daili Usage Keeper
 
 [English README](./README.en.md)
 
-`CPA Usage Keeper` 是一个独立的 CPA 用量持久化与可视化服务。
+`Daili Usage Keeper` 是一个独立的用量持久化与可视化服务。这个 Space 只提供受密码保护的统计看板，不提供模型推理、API 代理或请求转发服务。
 
-它依赖 [CLIProxyAPI（CPA）](https://github.com/router-for-me/CLIProxyAPI) 作为后端 CPA 数据来源，目标是在 CPA 之上补充持久化存储与统计分析能力。服务会从 CPA Redis usage 队列消费事件并写入 SQLite，定时拉取 CPA metadata，暴露聚合 API，并提供内置 Web Dashboard 用于查看 usage、pricing、request health 和 model/API 维度的统计信息。
+Space 的 Docker 镜像由当前仓库中的 Go 与 React 源码直接构建，最终运行在标准 Alpine 镜像上。服务从单独配置的 management metadata 端点读取用量数据，写入 SQLite，并提供 usage、pricing、request health 和 model/API 维度的统计视图。
 
 ![cpa-usage-keeper-screenshot](https://images.bitskyline.com/i/2026/05/1pmg6l.png)
 
@@ -164,65 +164,6 @@ docker run -d \
 
 `/data` 用于保存 SQLite 数据库、备份文件和日志文件，请挂载到持久化目录。
 
-## Docker Compose
-
-仓库提供了一个最简 `docker-compose.yaml` 示例，用于同时部署 CPA 和 CPA Usage Keeper：
-
-```yaml
-services:
-  cli-proxy-api:
-    image: eceasy/cli-proxy-api:latest
-    container_name: cli-proxy-api
-    restart: unless-stopped
-    ports:
-      - "8317:8317"
-      - "1455:1455"
-    volumes:
-      - ./cpa/config.yaml:/CLIProxyAPI/config.yaml
-      - ./cpa/auths:/root/.cli-proxy-api
-      - ./cpa/logs:/CLIProxyAPI/logs
-    networks:
-      - cpa-network
-
-  cpa-usage-keeper:
-    image: ghcr.io/willxup/cpa-usage-keeper:latest
-    container_name: cpa-usage-keeper
-    restart: unless-stopped
-    depends_on:
-      - cli-proxy-api
-    ports:
-      - "8080:8080"
-    environment:
-      TZ: Asia/Shanghai # 设置容器时区，日志时间会按该时区显示。
-      CPA_BASE_URL: http://cli-proxy-api:8317
-      CPA_MANAGEMENT_KEY: replace-with-your-management-key
-      REDIS_QUEUE_ADDR: cli-proxy-api:8317
-      AUTH_ENABLED: true
-      LOGIN_PASSWORD: replace-with-your-login-password
-    volumes:
-      - ./keeper:/data
-    networks:
-      - cpa-network
-
-networks:
-  cpa-network:
-    driver: bridge
-```
-
-启动：
-
-```bash
-docker compose up -d
-```
-
-停止：
-
-```bash
-docker compose down
-```
-
-CPA 文件放在 `./cpa`，CPA Usage Keeper 数据放在 `./keeper`。
-
 ## 子路径反代
 
 部署到 `/cpa` 时设置 `APP_BASE_PATH=/cpa`，并在反向代理中保留该前缀：
@@ -238,4 +179,4 @@ location /cpa/ {
 
 ## Daili Space deployment
 
-This Space builds CPA Usage Keeper from source and connects to `https://pjpjq-daili.hf.space` through CPA's HTTP `/v0/management/usage-queue` fallback. Dashboard auth is enabled with `LOGIN_PASSWORD`.
+This Space builds the usage dashboard from source and imports usage metadata from the separately configured `CPA_BASE_URL`. Dashboard auth is enabled with `LOGIN_PASSWORD`.
