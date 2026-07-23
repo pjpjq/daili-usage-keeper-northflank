@@ -147,6 +147,16 @@ export const refreshPageData = async ({ refreshActiveTab }: RefreshPageDataOptio
 
 export const getOverviewDisplayLoading = ({ loading, hasUsage }: { loading: boolean; hasUsage: boolean }) => loading && !hasUsage;
 
+export const sanitizeOverviewChartLinesWhenReady = ({
+  chartLines,
+  modelNames,
+  ready,
+}: {
+  chartLines: string[];
+  modelNames: string[];
+  ready: boolean;
+}) => ready ? sanitizeChartLines(chartLines, modelNames) : chartLines;
+
 export const scheduleOverviewAutoRefresh = ({
   enabled,
   refreshOverview,
@@ -1012,17 +1022,22 @@ export function UsagePage({ onAuthRequired }: { onAuthRequired?: () => void }) {
     () => getModelNamesFromUsage(usage?.usage ?? null),
     [usage]
   );
+  const overviewDataReady = usage !== null && !loading;
 
   useEffect(() => {
     if (!isOverviewTab) return;
     setChartLines((current) => {
-      const next = sanitizeChartLines(current, overviewModelNames);
+      const next = sanitizeOverviewChartLinesWhenReady({
+        chartLines: current,
+        modelNames: overviewModelNames,
+        ready: overviewDataReady,
+      });
       if (next.length === current.length && next.every((line, index) => line === current[index])) {
         return current;
       }
       return next;
     });
-  }, [isOverviewTab, overviewModelNames]);
+  }, [isOverviewTab, overviewDataReady, overviewModelNames]);
   const apiStats = useMemo(
     () => analysisData.apis.map((api) => ({
       endpoint: api.api_key,

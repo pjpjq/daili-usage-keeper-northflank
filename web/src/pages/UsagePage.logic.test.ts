@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { buildCustomDateRangeQuery, getOverviewChartEndMs, getOverviewDisplayLoading, getOverviewHourWindowHours, getTimeRangeOptions, getUsageTabOptions, refreshPageData, sanitizeRequestEventFilters, scheduleOverviewAutoRefresh, syncCpaData } from './UsagePage';
+import { buildCustomDateRangeQuery, getOverviewChartEndMs, getOverviewDisplayLoading, getOverviewHourWindowHours, getTimeRangeOptions, getUsageTabOptions, refreshPageData, sanitizeOverviewChartLinesWhenReady, sanitizeRequestEventFilters, scheduleOverviewAutoRefresh, syncCpaData } from './UsagePage';
 import { ApiError } from '@/lib/api';
 import { filterUsageByWindow, type UsageFilterWindow } from '@/utils/usage';
 import type { StatusResponse, UsageSnapshot } from '@/lib/types';
@@ -92,6 +92,25 @@ describe('UsagePage Overview loading display', () => {
 
   it('shows loading before Overview data has loaded', () => {
     expect(getOverviewDisplayLoading({ loading: true, hasUsage: false })).toBe(true);
+  });
+});
+
+describe('UsagePage Overview chart line persistence', () => {
+  it('keeps saved lines before Overview is ready, then removes expired models after loading', () => {
+    const savedLines = ['claude-sonnet', 'claude-opus'];
+
+    const initialLines = sanitizeOverviewChartLinesWhenReady({
+      chartLines: savedLines,
+      modelNames: [],
+      ready: false,
+    });
+    expect(initialLines).toBe(savedLines);
+
+    expect(sanitizeOverviewChartLinesWhenReady({
+      chartLines: initialLines,
+      modelNames: ['claude-sonnet'],
+      ready: true,
+    })).toEqual(['claude-sonnet']);
   });
 });
 
