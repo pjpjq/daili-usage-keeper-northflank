@@ -17,7 +17,7 @@ from huggingface_hub.errors import EntryNotFoundError
 
 UPSTREAM_REPOSITORY = "Willxup/cpa-usage-keeper"
 UPSTREAM_IMAGE = "ghcr.io/willxup/cpa-usage-keeper"
-SPACE_REPOSITORY = "pjpjq/daili-usage-keeper"
+SPACE_REPOSITORY = "bolikoto/daili-usage"
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_TEMPLATE = REPOSITORY_ROOT / "deploy/huggingface/Dockerfile.template"
 DIGEST_PATTERN = re.compile(r"sha256:[0-9a-f]{64}\Z")
@@ -166,9 +166,9 @@ def verify_runtime(api: HfApi, repo_id: str, token: str, expected_sha: str, time
             print(f"Space runtime verified: sha={current_sha} stage={stage}")
             return
         elif stage == "PAUSED":
-            if "Quota exceeded" in error_message:
+            if "Quota exceeded" in error_message or "Flagged as abusive" in error_message:
                 print(
-                    f"::warning::Space source updated to {current_sha}, but runtime verification is blocked by quota: {error_message}"
+                    f"::warning::Space source updated to {current_sha}, but Hugging Face has blocked runtime verification: {error_message}"
                 )
                 return
             raise RuntimeError(f"Space is PAUSED after update: {error_message}")

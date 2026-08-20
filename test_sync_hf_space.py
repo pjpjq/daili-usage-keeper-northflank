@@ -47,12 +47,12 @@ class SyncHuggingFaceSpaceTest(unittest.TestCase):
     def test_runtime_stage_reads_huggingface_space_runtime_raw_error(self) -> None:
         runtime = SimpleNamespace(
             stage="PAUSED",
-            raw={"errorMessage": "Quota exceeded for flavor cpu-basic"},
+            raw={"errorMessage": "Flagged as abusive"},
         )
 
         self.assertEqual(
             sync_hf_space.runtime_stage(runtime),
-            ("PAUSED", "Quota exceeded for flavor cpu-basic"),
+            ("PAUSED", "Flagged as abusive"),
         )
 
     def test_noop_does_not_create_huggingface_commit(self) -> None:
