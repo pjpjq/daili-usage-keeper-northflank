@@ -1,0 +1,78 @@
+name: Update CPA Usage Keeper HF Space
+
+on:
+  schedule:
+    - cron: "23 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cpa-usage-keeper-hf-update
+  cancel-in-progress: false
+
+jobs:
+  update:
+    runs-on: [self-hosted, macOS, ARM64, usage-keeper-updater]
+    timeout-minutes: 30
+    env:
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
+      HTTP_PROXY: "http://127.0.0.1:6324"
+      HTTPS_PROXY: "http://127.0.0.1:6324"
+      NO_PROXY: "127.0.0.1,localhost"
+
+    steps:
+      - name: Check out trusted updater
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Verify runner tools and credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+          command -v python3
+          test -n "$HF_TOKEN"
+
+      - name: Create isolated Python environment
+        id: python
+        shell: bash
+        run: |
+          set -euo pipefail
+          venv="$RUNNER_TEMP/cpa-usage-keeper-hf-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          python3 -m venv "$venv"
+          "$venv/bin/python" -m pip install --disable-pip-version-check --no-input \
+            "huggingface_hub==1.4.1"
+          echo "venv=$venv" >> "$GITHUB_OUTPUT"
+
+      - name: Run updater tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          "${{ steps.python.outputs.venv }}/bin/python" -m unittest -v test_sync_hf_space.py
+
+      - name: Check and update Space
+        shell: bash
+        run: |
+          set -euo pipefail
+          "${{ steps.python.outputs.venv }}/bin/python" scripts/sync_hf_space.py
+
+      - name: Clear temporary Python environment
+        if: always()
+        env:
+          VENV_PATH: ${{ steps.python.outputs.venv }}
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import os
+          import shutil
+          from pathlib import Path
+
+          runner_temp = Path(os.environ["RUNNER_TEMP"]).resolve()
+          value = os.environ.get("VENV_PATH", "").strip()
+          if value:
+              path = Path(value).resolve()
+              if path != runner_temp and runner_temp in path.parents:
+                  shutil.rmtree(path, ignore_errors=True)
+          PY
