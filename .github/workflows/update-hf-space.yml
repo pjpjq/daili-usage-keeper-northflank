@@ -1,4 +1,4 @@
-name: Update CPA Usage Keeper HF Space
+name: Update Bolikoto Daili Usage HF Space
 
 on:
   schedule:
@@ -17,7 +17,8 @@ jobs:
     runs-on: [self-hosted, macOS, ARM64, usage-keeper-updater]
     timeout-minutes: 30
     env:
-      HF_TOKEN: ${{ secrets.HF_TOKEN }}
+      HF_TOKEN: ${{ secrets.HF_TOKEN_BOLIKOTO }}
+      HF_SPACE: "bolikoto/daili-usage"
       HTTP_PROXY: "http://127.0.0.1:6324"
       HTTPS_PROXY: "http://127.0.0.1:6324"
       NO_PROXY: "127.0.0.1,localhost"
@@ -34,6 +35,7 @@ jobs:
           set -euo pipefail
           command -v python3
           test -n "$HF_TOKEN"
+          test "$HF_SPACE" = "bolikoto/daili-usage"
 
       - name: Create isolated Python environment
         id: python
@@ -56,7 +58,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          "${{ steps.python.outputs.venv }}/bin/python" scripts/sync_hf_space.py
+          "${{ steps.python.outputs.venv }}/bin/python" scripts/sync_hf_space.py --space "$HF_SPACE"
 
       - name: Clear temporary Python environment
         if: always()
