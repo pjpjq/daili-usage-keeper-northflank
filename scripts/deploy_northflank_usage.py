@@ -138,17 +138,26 @@ def wait_for_deployment(config: Config, token: str, expected_sha: str, sleep: Ca
     raise DeployError(f"Northflank deployment timed out waiting for {expected_sha}")
 
 
-def probe_health(config: Config) -> None:
+def probe_health(config: Config, sleep: Callable[[float], None] = time.sleep) -> None:
     url = config.base_url.rstrip("/") + "/healthz"
-    request = urllib.request.Request(url, headers={"Accept": "application/json"})
-    try:
-        with urllib.request.urlopen(request, timeout=30) as response:
-            body = response.read().decode("utf-8", errors="replace")
-            if response.status != 200 or '"status":"ok"' not in body.replace(" ", ""):
-                raise DeployError(f"Northflank health probe returned HTTP {response.status}: {body[:500]}")
-    except urllib.error.HTTPError as exc:
-        raise DeployError(f"Northflank health probe returned HTTP {exc.code}") from exc
-    print(f"Northflank health probe: HTTP 200 {body[:200]}")
+    deadline = time.monotonic() + min(config.timeout_seconds, 300)
+    last_error = "unavailable"
+    while time.monotonic() < deadline:
+        request = urllib.request.Request(url, headers={"Accept": "application/json"})
+        try:
+            with urllib.request.urlopen(request, timeout=30) as response:
+                body = response.read().decode("utf-8", errors="replace")
+                if response.status == 200 and '"status":"ok"' in body.replace(" ", ""):
+                    print(f"Northflank health probe: HTTP 200 {body[:200]}")
+                    return
+                last_error = f"HTTP {response.status}: {body[:500]}"
+        except urllib.error.HTTPError as exc:
+            last_error = f"HTTP {exc.code}"
+        except OSError as exc:
+            last_error = str(exc)
+        print(f"Waiting for Northflank health: {last_error}")
+        sleep(config.poll_seconds)
+    raise DeployError(f"Northflank health probe timed out: {last_error}")
 
 
 def run(config: Config, token: str, expected_sha: str, apply: bool) -> dict[str, Any]:

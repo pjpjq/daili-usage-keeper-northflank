@@ -1,5 +1,6 @@
+import io
 import unittest
-from types import SimpleNamespace
+import urllib.error
 from unittest.mock import patch
 
 from scripts import deploy_northflank_usage as deployer
@@ -53,6 +54,28 @@ class NorthflankUsageDeployerTest(unittest.TestCase):
             self.assertEqual(deployer.start_build(config, "token", SHA), "bright-build-123")
         self.assertEqual(captured["method"], "POST")
         self.assertEqual(captured["payload"], {"sha": SHA})
+
+    def test_health_probe_retries_startup_503(self) -> None:
+        config = deployer.Config(timeout_seconds=30, poll_seconds=1)
+
+        class Response:
+            status = 200
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def read(self):
+                return b'{"status":"ok"}'
+
+        responses = [
+            urllib.error.HTTPError("https://example/healthz", 503, "starting", {}, io.BytesIO()),
+            Response(),
+        ]
+        with patch.object(deployer.urllib.request, "urlopen", side_effect=responses):
+            deployer.probe_health(config, sleep=lambda _seconds: None)
 
 
 if __name__ == "__main__":
