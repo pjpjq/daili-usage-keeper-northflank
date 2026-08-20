@@ -1,4 +1,4 @@
-name: Update Bolikoto Daili Usage HF Space
+name: Deploy Daili Usage to Northflank
 
 on:
   schedule:
@@ -9,7 +9,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: cpa-usage-keeper-hf-update
+  group: daili-usage-northflank-deploy
   cancel-in-progress: false
 
 jobs:
@@ -17,14 +17,16 @@ jobs:
     runs-on: [self-hosted, macOS, ARM64, usage-keeper-updater]
     timeout-minutes: 30
     env:
-      HF_TOKEN: ${{ secrets.HF_TOKEN_BOLIKOTO }}
-      HF_SPACE: "bolikoto/daili-usage"
+      NORTHFLANK_API_TOKEN: ${{ secrets.NORTHFLANK_API_TOKEN_QUINTESSENTIAL }}
+      NORTHFLANK_PROJECT: "new-api"
+      NORTHFLANK_SERVICE: "daili-usage"
+      DAILI_USAGE_BASE_URL: "https://p01--daili-usage--q29tm9z7cs9k.code.run"
       HTTP_PROXY: "http://127.0.0.1:6324"
       HTTPS_PROXY: "http://127.0.0.1:6324"
       NO_PROXY: "127.0.0.1,localhost"
 
     steps:
-      - name: Check out trusted updater
+      - name: Check out trusted deployer
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
@@ -34,31 +36,33 @@ jobs:
         run: |
           set -euo pipefail
           command -v python3
-          test -n "$HF_TOKEN"
-          test "$HF_SPACE" = "bolikoto/daili-usage"
+          command -v curl
+          test -n "$NORTHFLANK_API_TOKEN"
+          test "$NORTHFLANK_PROJECT" = "new-api"
+          test "$NORTHFLANK_SERVICE" = "daili-usage"
 
       - name: Create isolated Python environment
         id: python
         shell: bash
         run: |
           set -euo pipefail
-          venv="$RUNNER_TEMP/cpa-usage-keeper-hf-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          venv="$RUNNER_TEMP/daili-usage-northflank-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           python3 -m venv "$venv"
-          "$venv/bin/python" -m pip install --disable-pip-version-check --no-input \
-            "huggingface_hub==1.4.1"
           echo "venv=$venv" >> "$GITHUB_OUTPUT"
 
-      - name: Run updater tests
+      - name: Run deployer tests
         shell: bash
         run: |
           set -euo pipefail
-          "${{ steps.python.outputs.venv }}/bin/python" -m unittest -v test_sync_hf_space.py
+          "${{ steps.python.outputs.venv }}/bin/python" -m unittest -v test_sync_northflank.py
 
-      - name: Check and update Space
+      - name: Check and deploy latest main commit
         shell: bash
         run: |
           set -euo pipefail
-          "${{ steps.python.outputs.venv }}/bin/python" scripts/sync_hf_space.py --space "$HF_SPACE"
+          "${{ steps.python.outputs.venv }}/bin/python" scripts/deploy_northflank_usage.py \
+            --expected-sha "$GITHUB_SHA" \
+            --apply
 
       - name: Clear temporary Python environment
         if: always()
