@@ -28,6 +28,21 @@ Space 的 Docker 镜像由当前仓库中的 Go 与 React 源码直接构建，�
 - SQLite 数据库本地备份与保留策略
 - Docker / Docker Compose 部署
 
+## Vercel 前端部署
+
+React 看板可以独立部署到 Vercel。配置文件
+[`web/vercel.json`](./web/vercel.json) 将 `/api/v1/*` 请求代理到独立运行的后端，
+因此浏览器不需要跨域访问 API。
+
+- [一键部署前端到 Vercel](https://vercel.com/new/clone?repository-url=https://github.com/pjpjq/daili-usage-keeper-northflank&root-directory=web)
+- 后端健康检查：<https://p01--daili-usage--q29tm9z7cs9k.code.run/healthz>
+
+Vercel 部署只包含前端；Go API、SQLite 数据库和后台同步仍运行在独立的
+Northflank 服务中。公开看板前，请在后端设置密码（`AUTH_ENABLED=true`、
+`LOGIN_PASSWORD=...`）。不要提交后端密钥、密码或运行时数据。
+
+Thanks to Vercel for their support of open-source software,
+
 ## 项目结构
 
 ```text

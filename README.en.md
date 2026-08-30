@@ -18,6 +18,22 @@ The Space image builds the Go and React application directly from the source in 
 - Local SQLite database backups with retention
 - Docker / Docker Compose deployment
 
+## Vercel frontend deployment
+
+The React dashboard can be deployed independently to Vercel. The configuration
+in [`web/vercel.json`](./web/vercel.json) proxies `/api/v1/*` to the separately
+hosted backend, so the browser keeps API requests same-origin.
+
+- [Deploy the frontend to Vercel](https://vercel.com/new/clone?repository-url=https://github.com/pjpjq/daili-usage-keeper-northflank&root-directory=web)
+- Backend health check: <https://p01--daili-usage--q29tm9z7cs9k.code.run/healthz>
+
+The Vercel deployment contains only the frontend; the Go API, SQLite database,
+and background sync remain on the independent Northflank service. Set a
+password on the backend (`AUTH_ENABLED=true`, `LOGIN_PASSWORD=...`) before
+sharing the dashboard. Never commit backend keys, passwords, or runtime data.
+
+Thanks to Vercel for their support of open-source software,
+
 ## Project Structure
 
 ```text
