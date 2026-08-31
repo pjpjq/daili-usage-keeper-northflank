@@ -25,6 +25,7 @@ in [`web/vercel.json`](./web/vercel.json) proxies `/api/v1/*` to the separately
 hosted backend, so the browser keeps API requests same-origin.
 
 - [Deploy the frontend to Vercel](https://vercel.com/new/clone?repository-url=https://github.com/pjpjq/daili-usage-keeper-northflank&root-directory=web)
+- [Live dashboard](https://daili-usage-keeper-northflank.vercel.app)
 - Backend health check: <https://p01--daili-usage--q29tm9z7cs9k.code.run/healthz>
 
 The Vercel deployment contains only the frontend; the Go API, SQLite database,
