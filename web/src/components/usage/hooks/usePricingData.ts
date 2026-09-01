@@ -30,6 +30,12 @@ const pricingToModelPrice = (entry: {
   cache: entry.cache_price_per_1m,
 });
 
+const pricesEqual = (left: ModelPrice | undefined, right: ModelPrice): boolean => (
+  left?.prompt === right.prompt
+  && left.completion === right.completion
+  && left.cache === right.cache
+);
+
 export function usePricingData(options: UsePricingDataOptions = {}): UsePricingDataReturn {
   const { onAuthRequired, enabled = true } = options;
   const { t } = useTranslation();
@@ -105,13 +111,15 @@ export function usePricingData(options: UsePricingDataOptions = {}): UsePricingD
       const previousModels = new Set(Object.keys(previousPrices));
       const nextModels = new Set(Object.keys(prices));
       await Promise.all([
-        ...Object.entries(prices).map(([model, pricing]) =>
-          updatePricing(model, {
-            prompt_price_per_1m: pricing.prompt,
-            completion_price_per_1m: pricing.completion,
-            cache_price_per_1m: pricing.cache,
-          })
-        ),
+        ...Object.entries(prices)
+          .filter(([model, pricing]) => !pricesEqual(previousPrices[model], pricing))
+          .map(([model, pricing]) =>
+            updatePricing(model, {
+              prompt_price_per_1m: pricing.prompt,
+              completion_price_per_1m: pricing.completion,
+              cache_price_per_1m: pricing.cache,
+            })
+          ),
         ...Array.from(previousModels)
           .filter((model) => !nextModels.has(model))
           .map((model) => deletePricing(model)),

@@ -34,7 +34,7 @@ func TestExternalPricingSyncerUpdatesCurrentModelsAndPreservesUnmatchedPrices(t 
 		"opencode":{"models":{"grok-4.5":{"id":"grok-4.5","cost":{"input":2,"output":6,"cache_read":0.5}}}},
 		"openai":{"models":{"gpt-5.6-sol":{"id":"gpt-5.6-sol","cost":{"input":5,"output":30,"cache_read":0.5}}}},
 		"anthropic":{"models":{"claude-opus-4-7":{"id":"claude-opus-4-7","cost":{"input":5,"output":25,"cache_read":0.5}}}},
-		"google":{"models":{"gemini-3.5-flash":{"id":"gemini-3.5-flash","cost":{"input":1.5,"output":9,"cache_read":0.15}}}}
+		"google":{"models":{"gemini-3.5-flash":{"id":"gemini-3.5-flash","cost":{"input":1.5,"output":9,"cache_read":0.15}},"gemini-3.7-flash":{"id":"gemini-3.7-flash","cost":{"input":0.75,"output":3.75,"cache_read":0.075}}}}
 	}`
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("User-Agent") != "cpa-usage-keeper/pricing-sync" {
@@ -52,6 +52,7 @@ func TestExternalPricingSyncerUpdatesCurrentModelsAndPreservesUnmatchedPrices(t 
 			{ID: "openai/gpt-5.6-sol"},
 			{ID: "claude-opus-4-7-thinking", OwnedBy: "anthropic"},
 			{ID: "gemini-3.5-flash-extra-low", OwnedBy: "google"},
+			{ID: "gemini-3.7-flash-high", OwnedBy: "google"},
 			{ID: "unpriced-model", OwnedBy: "unknown"},
 		}},
 	}}, &http.Client{Timeout: time.Second}, server.URL)
@@ -72,6 +73,7 @@ func TestExternalPricingSyncerUpdatesCurrentModelsAndPreservesUnmatchedPrices(t 
 	assertSyncedPrice(t, byModel["openai/gpt-5.6-sol"], 5, 30, 0.5)
 	assertSyncedPrice(t, byModel["claude-opus-4-7-thinking"], 5, 25, 0.5)
 	assertSyncedPrice(t, byModel["gemini-3.5-flash-extra-low"], 1.5, 9, 0.15)
+	assertSyncedPrice(t, byModel["gemini-3.7-flash-high"], 0.75, 3.75, 0.075)
 	assertSyncedPrice(t, byModel["manual-only"], 9, 10, 1)
 	if _, ok := byModel["unpriced-model"]; ok {
 		t.Fatal("expected catalog-missing model to remain unpriced")

@@ -198,10 +198,11 @@ func catalogModelCandidates(provider, model string) []string {
 			candidates = append(candidates, strings.TrimSuffix(model, "-thinking"))
 		}
 	case "google":
-		if strings.HasSuffix(model, "-extra-low") {
-			candidates = append(candidates, strings.TrimSuffix(model, "-extra-low"))
-		} else if strings.HasSuffix(model, "-low") {
-			candidates = append(candidates, strings.TrimSuffix(model, "-low"))
+		for _, suffix := range []string{"-extra-low", "-low", "-medium", "-high"} {
+			if strings.HasSuffix(model, suffix) {
+				candidates = append(candidates, strings.TrimSuffix(model, suffix))
+				break
+			}
 		}
 	}
 	return candidates
