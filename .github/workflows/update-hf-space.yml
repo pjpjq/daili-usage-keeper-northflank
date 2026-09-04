@@ -14,16 +14,13 @@ concurrency:
 
 jobs:
   update:
-    runs-on: [self-hosted, macOS, ARM64, usage-keeper-updater]
+    runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
       NORTHFLANK_API_TOKEN: ${{ secrets.NORTHFLANK_API_TOKEN_QUINTESSENTIAL }}
       NORTHFLANK_PROJECT: "new-api"
       NORTHFLANK_SERVICE: "daili-usage"
       DAILI_USAGE_BASE_URL: "https://p01--daili-usage--q29tm9z7cs9k.code.run"
-      HTTP_PROXY: "http://127.0.0.1:6324"
-      HTTPS_PROXY: "http://127.0.0.1:6324"
-      NO_PROXY: "127.0.0.1,localhost"
 
     steps:
       - name: Check out trusted deployer
