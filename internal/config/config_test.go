@@ -17,7 +17,7 @@ var configEnvKeys = []string{
 	"SQLITE_PATH", "BACKUP_ENABLED", "BACKUP_DIR", "BACKUP_INTERVAL", "BACKUP_RETENTION_DAYS",
 	"REQUEST_TIMEOUT", "LOG_LEVEL", "LOG_FILE_ENABLED", "LOG_DIR", "LOG_RETENTION_DAYS",
 	"AUTH_ENABLED", "LOGIN_PASSWORD", "AUTH_SESSION_TTL", "TZ", "PRICING_SYNC_ENABLED",
-	"PRICING_SYNC_INTERVAL", "PRICING_SOURCE_URL",
+	"PRICING_SYNC_INTERVAL", "PRICING_SOURCE_URL", "DATABASE_URL", "POSTGRES_URL", "POSTGRES_URI",
 }
 
 func TestMain(m *testing.M) {
@@ -559,5 +559,50 @@ func TestLoadFromEnvRejectsNonPositiveAuthSessionTTL(t *testing.T) {
 	_, err := LoadFromEnv()
 	if err == nil || err.Error() != "AUTH_SESSION_TTL must be positive" {
 		t.Fatalf("expected AUTH_SESSION_TTL validation error, got %v", err)
+	}
+}
+
+func TestLoadFromEnvReadsDatabaseURL(t *testing.T) {
+	t.Setenv("CPA_BASE_URL", "http://127.0.0.1:"+cpa.ManagementRedisDefaultPort)
+	t.Setenv("CPA_MANAGEMENT_KEY", "secret")
+	t.Setenv("DATABASE_URL", "postgres://user:pass@localhost:5432/testdb?sslmode=disable")
+
+	cfg, err := LoadFromEnv()
+	if err != nil {
+		t.Fatalf("LoadFromEnv returned error: %v", err)
+	}
+
+	if cfg.DatabaseURL != "postgres://user:pass@localhost:5432/testdb?sslmode=disable" {
+		t.Fatalf("expected DatabaseURL to be loaded, got %q", cfg.DatabaseURL)
+	}
+}
+
+func TestLoadFromEnvFallsBackToPostgresURL(t *testing.T) {
+	t.Setenv("CPA_BASE_URL", "http://127.0.0.1:"+cpa.ManagementRedisDefaultPort)
+	t.Setenv("CPA_MANAGEMENT_KEY", "secret")
+	t.Setenv("POSTGRES_URL", "postgres://fallback:pass@localhost:5432/fallbackdb")
+
+	cfg, err := LoadFromEnv()
+	if err != nil {
+		t.Fatalf("LoadFromEnv returned error: %v", err)
+	}
+
+	if cfg.DatabaseURL != "postgres://fallback:pass@localhost:5432/fallbackdb" {
+		t.Fatalf("expected DatabaseURL to fall back to POSTGRES_URL, got %q", cfg.DatabaseURL)
+	}
+}
+
+func TestLoadFromEnvFallsBackToPostgresURI(t *testing.T) {
+	t.Setenv("CPA_BASE_URL", "http://127.0.0.1:"+cpa.ManagementRedisDefaultPort)
+	t.Setenv("CPA_MANAGEMENT_KEY", "secret")
+	t.Setenv("POSTGRES_URI", "postgres://uri-user:pass@localhost:5432/uridb")
+
+	cfg, err := LoadFromEnv()
+	if err != nil {
+		t.Fatalf("LoadFromEnv returned error: %v", err)
+	}
+
+	if cfg.DatabaseURL != "postgres://uri-user:pass@localhost:5432/uridb" {
+		t.Fatalf("expected DatabaseURL to fall back to POSTGRES_URI, got %q", cfg.DatabaseURL)
 	}
 }
