@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import './index.css';
-import { ApiError, getSession, login } from './lib/api';
+import { ApiError, clearStoredToken, getSession, login } from './lib/api';
 import { LoginPage } from './pages/LoginPage';
 import { UsagePage } from './pages/UsagePage';
 
@@ -14,14 +14,17 @@ function App() {
   const [submitting, setSubmitting] = useState(false);
 
   const loadSession = useCallback(async () => {
-    const session = await getSession();
-    setAuthState(session.authenticated ? 'authenticated' : 'unauthenticated');
+    try {
+      const session = await getSession();
+      setAuthState(session.authenticated ? 'authenticated' : 'unauthenticated');
+    } catch {
+      clearStoredToken();
+      setAuthState('unauthenticated');
+    }
   }, []);
 
   useEffect(() => {
-    void loadSession().catch(() => {
-      setAuthState('unauthenticated');
-    });
+    void loadSession();
   }, [loadSession]);
 
   const handleLogin = useCallback(async (password: string) => {
@@ -50,7 +53,14 @@ function App() {
     return <LoginPage loading={submitting} error={loginError} onSubmit={handleLogin} />;
   }
 
-  return <UsagePage onAuthRequired={() => setAuthState('unauthenticated')} />;
+  return (
+    <UsagePage
+      onAuthRequired={() => {
+        clearStoredToken();
+        setAuthState('unauthenticated');
+      }}
+    />
+  );
 }
 
 export default App;

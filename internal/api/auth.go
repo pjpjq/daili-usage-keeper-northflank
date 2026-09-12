@@ -4,6 +4,7 @@ import (
 	"crypto/subtle"
 	"net"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -38,6 +39,11 @@ type sessionResponse struct {
 	Authenticated bool `json:"authenticated"`
 }
 
+type loginResponse struct {
+	Token     string `json:"token"`
+	ExpiresAt string `json:"expires_at"`
+}
+
 func NewAuthHandler(config AuthConfig, sessions *auth.SessionManager) *authHandler {
 	return &authHandler{config: config, sessions: sessions, failedAttempts: make(map[string]int)}
 }
@@ -46,6 +52,21 @@ func (h *authHandler) registerRoutes(router gin.IRoutes) {
 	router.GET("/session", h.getSession)
 	router.POST("/login", h.login)
 	router.POST("/logout", h.logout)
+}
+
+func (h *authHandler) extractToken(c *gin.Context) string {
+	if authHeader := c.GetHeader("Authorization"); strings.HasPrefix(authHeader, "Bearer ") {
+		if token := strings.TrimSpace(strings.TrimPrefix(authHeader, "Bearer ")); token != "" {
+			return token
+		}
+	}
+	if token := strings.TrimSpace(c.GetHeader("X-Auth-Token")); token != "" {
+		return token
+	}
+	if token, err := c.Cookie(sessionCookieName); err == nil && token != "" {
+		return token
+	}
+	return ""
 }
 
 func (h *authHandler) middleware() gin.HandlerFunc {
@@ -59,8 +80,8 @@ func (h *authHandler) middleware() gin.HandlerFunc {
 			return
 		}
 
-		token, err := c.Cookie(sessionCookieName)
-		if err != nil || !h.sessions.Validate(token) {
+		token := h.extractToken(c)
+		if token == "" || !h.sessions.Validate(token) {
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "authentication required"})
 			return
 		}
@@ -70,6 +91,9 @@ func (h *authHandler) middleware() gin.HandlerFunc {
 }
 
 func (h *authHandler) getSession(c *gin.Context) {
+	c.Header("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0")
+	c.Header("Pragma", "no-cache")
+
 	if h == nil || !h.config.Enabled {
 		c.JSON(http.StatusOK, sessionResponse{Authenticated: true})
 		return
@@ -79,8 +103,8 @@ func (h *authHandler) getSession(c *gin.Context) {
 		return
 	}
 
-	token, err := c.Cookie(sessionCookieName)
-	if err != nil {
+	token := h.extractToken(c)
+	if token == "" {
 		c.JSON(http.StatusOK, sessionResponse{Authenticated: false})
 		return
 	}
@@ -124,7 +148,8 @@ func (h *authHandler) login(c *gin.Context) {
 		return
 	}
 
-	secure := c.Request.TLS != nil || c.GetHeader("X-Forwarded-Proto") == "https"
+	proto := c.GetHeader("X-Forwarded-Proto")
+	secure := c.Request.TLS != nil || strings.HasPrefix(strings.ToLower(proto), "https") || strings.EqualFold(c.GetHeader("X-Forwarded-Ssl"), "on")
 	cookiePath := h.config.BasePath
 	if cookiePath == "" {
 		cookiePath = "/"
@@ -139,7 +164,10 @@ func (h *authHandler) login(c *gin.Context) {
 		Expires:  expiresAt,
 		MaxAge:   int(time.Until(expiresAt).Seconds()),
 	})
-	c.Status(http.StatusNoContent)
+	c.JSON(http.StatusOK, loginResponse{
+		Token:     token,
+		ExpiresAt: expiresAt.Format(time.RFC3339),
+	})
 }
 
 func (h *authHandler) logout(c *gin.Context) {
@@ -148,7 +176,7 @@ func (h *authHandler) logout(c *gin.Context) {
 		return
 	}
 	if h.sessions != nil {
-		if token, err := c.Cookie(sessionCookieName); err == nil {
+		if token := h.extractToken(c); token != "" {
 			h.sessions.Delete(token)
 		}
 	}

@@ -31,8 +31,19 @@ export function LoginPage({ loading = false, error = '', onSubmit }: LoginPagePr
 
         <Card className={styles.loginCard}>
           <form className={styles.form} onSubmit={(event) => void handleSubmit(event)}>
+            <input
+              type="text"
+              name="username"
+              value="admin"
+              autoComplete="username"
+              style={{ display: 'none' }}
+              tabIndex={-1}
+              readOnly
+              aria-hidden="true"
+            />
             <Input
               type="password"
+              name="password"
               autoComplete="current-password"
               label={t('auth.password_label')}
               placeholder={t('auth.password_placeholder')}

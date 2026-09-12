@@ -1,4 +1,4 @@
-import type { AuthSessionResponse, PricingEntry, PricingResponse, StatusResponse, UsageAnalysisResponse, UsageEventFilterOptionsResponse, UsedModelsResponse, UsageIdentitiesResponse, UsageEventsResponse, UsageOverviewResponse } from './types'
+import type { AuthSessionResponse, LoginResponse, PricingEntry, PricingResponse, StatusResponse, UsageAnalysisResponse, UsageEventFilterOptionsResponse, UsedModelsResponse, UsageIdentitiesResponse, UsageEventsResponse, UsageOverviewResponse } from './types'
 
 export class ApiError extends Error {
   status: number
@@ -30,7 +30,49 @@ export function apiPath(path: string): string {
   return `${normalizeBasePath(window.__APP_BASE_PATH__)}/api/v1${normalizedPath}`
 }
 
+export const TOKEN_STORAGE_KEY = 'cpa_usage_keeper_token'
+
+function getStorage(): Storage | null {
+  try {
+    if (typeof window !== 'undefined' && window.localStorage) {
+      return window.localStorage
+    }
+  } catch {
+    // ignore storage access errors
+  }
+  return null
+}
+
+export function getStoredToken(): string | null {
+  try {
+    return getStorage()?.getItem(TOKEN_STORAGE_KEY) ?? null
+  } catch {
+    return null
+  }
+}
+
+export function setStoredToken(token: string | null): void {
+  try {
+    const storage = getStorage()
+    if (!storage) return
+    if (token) {
+      storage.setItem(TOKEN_STORAGE_KEY, token)
+    } else {
+      storage.removeItem(TOKEN_STORAGE_KEY)
+    }
+  } catch {
+    // ignore storage quota or security errors
+  }
+}
+
+export function clearStoredToken(): void {
+  setStoredToken(null)
+}
+
 async function parseApiError(response: Response, fallback: string): Promise<never> {
+  if (response.status === 401) {
+    clearStoredToken()
+  }
   let message = fallback
   try {
     const payload = await response.json() as { error?: string }
@@ -43,22 +85,43 @@ async function parseApiError(response: Response, fallback: string): Promise<neve
   throw new ApiError(message, response.status)
 }
 
+function buildHeaders(initHeaders?: HeadersInit): Headers {
+  const headers = new Headers(initHeaders)
+  const token = getStoredToken()
+  if (token && !headers.has('Authorization')) {
+    headers.set('Authorization', 'Bearer ' + token)
+  }
+  return headers
+}
+
 async function apiFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+  const headers = buildHeaders(init?.headers)
   return fetch(input, {
     credentials: 'include',
     ...init,
+    headers,
   })
 }
 
 export async function getSession(signal?: AbortSignal): Promise<AuthSessionResponse> {
-  const response = await apiFetch(apiPath('/auth/session'), { signal })
+  const response = await apiFetch(apiPath('/auth/session'), {
+    signal,
+    cache: 'no-store',
+  })
   if (!response.ok) {
-    await parseApiError(response, `Failed to load auth session: ${response.status}`)
+    if (response.status === 401) {
+      clearStoredToken()
+    }
+    await parseApiError(response, 'Failed to load auth session: ' + response.status)
   }
-  return response.json()
+  const payload = (await response.json()) as AuthSessionResponse
+  if (!payload.authenticated) {
+    clearStoredToken()
+  }
+  return payload
 }
 
-export async function login(password: string): Promise<void> {
+export async function login(password: string): Promise<LoginResponse> {
   const response = await apiFetch(apiPath('/auth/login'), {
     method: 'POST',
     headers: {
@@ -67,7 +130,29 @@ export async function login(password: string): Promise<void> {
     body: JSON.stringify({ password }),
   })
   if (!response.ok) {
-    await parseApiError(response, `Failed to login: ${response.status}`)
+    clearStoredToken()
+    await parseApiError(response, 'Failed to login: ' + response.status)
+  }
+  let payload: LoginResponse = { token: '', expires_at: '' }
+  try {
+    payload = (await response.json()) as LoginResponse
+  } catch {
+    // backward compatibility in case of 204 or non-JSON body
+  }
+  if (payload.token) {
+    setStoredToken(payload.token)
+  }
+  return payload
+}
+
+export async function logout(signal?: AbortSignal): Promise<void> {
+  try {
+    await apiFetch(apiPath('/auth/logout'), {
+      method: 'POST',
+      signal,
+    })
+  } finally {
+    clearStoredToken()
   }
 }
 

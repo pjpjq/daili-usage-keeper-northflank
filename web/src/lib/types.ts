@@ -2,6 +2,11 @@ export interface AuthSessionResponse {
   authenticated: boolean
 }
 
+export interface LoginResponse {
+  token: string
+  expires_at: string
+}
+
 export interface StatusResponse {
   running: boolean
   sync_running: boolean

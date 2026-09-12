@@ -1,5 +1,16 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
-import { fetchUsageEventFilterOptions, fetchUsageEvents, fetchUsageIdentities, triggerSync } from './api';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import {
+  clearStoredToken,
+  fetchUsageEventFilterOptions,
+  fetchUsageEvents,
+  fetchUsageIdentities,
+  getSession,
+  getStoredToken,
+  login,
+  logout,
+  setStoredToken,
+  triggerSync,
+} from './api';
 
 describe('fetchUsageEvents', () => {
   afterEach(() => {
@@ -127,5 +138,96 @@ describe('fetchUsageEvents', () => {
     expect(response.last_status).toBe('completed');
     expect(parsed.pathname).toBe('/api/v1/sync');
     expect(init).toMatchObject({ credentials: 'include', method: 'POST', signal });
+  });
+});
+
+describe('auth token persistence and headers', () => {
+  let mockStorage: Record<string, string>;
+
+  beforeEach(() => {
+    mockStorage = {};
+    const storage = {
+      getItem: (key: string) => mockStorage[key] ?? null,
+      setItem: (key: string, val: string) => {
+        mockStorage[key] = String(val);
+      },
+      removeItem: (key: string) => {
+        delete mockStorage[key];
+      },
+      clear: () => {
+        mockStorage = {};
+      },
+    };
+    vi.stubGlobal('window', {
+      __APP_BASE_PATH__: undefined,
+      localStorage: storage,
+    });
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  it('stores token on successful login and passes Bearer token on subsequent calls', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ token: 'mock-token-xyz', expires_at: '2026-10-01T00:00:00Z' }),
+    } as Response);
+
+    const loginRes = await login('secret-pass');
+    expect(loginRes.token).toBe('mock-token-xyz');
+    expect(getStoredToken()).toBe('mock-token-xyz');
+
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ authenticated: true }),
+    } as Response);
+
+    const sessionRes = await getSession();
+    expect(sessionRes.authenticated).toBe(true);
+
+    const [, secondInit] = fetchMock.mock.calls[1];
+    const headers = secondInit?.headers as Headers;
+    expect(headers.get('Authorization')).toBe('Bearer mock-token-xyz');
+  });
+
+  it('clears stored token when session returns unauthenticated', async () => {
+    setStoredToken('expired-token');
+    expect(getStoredToken()).toBe('expired-token');
+
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ authenticated: false }),
+    } as Response);
+
+    const sessionRes = await getSession();
+    expect(sessionRes.authenticated).toBe(false);
+    expect(getStoredToken()).toBeNull();
+  });
+
+  it('clears stored token when an API call fails with 401', async () => {
+    setStoredToken('invalid-token');
+
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
+      ok: false,
+      status: 401,
+      json: async () => ({ error: 'unauthorized' }),
+    } as Response);
+
+    await expect(getSession()).rejects.toThrow();
+    expect(getStoredToken()).toBeNull();
+  });
+
+  it('clears stored token on logout', async () => {
+    setStoredToken('active-token');
+
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({}),
+    } as Response);
+
+    await logout();
+    expect(getStoredToken()).toBeNull();
   });
 });

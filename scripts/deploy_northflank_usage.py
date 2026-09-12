@@ -86,6 +86,10 @@ def deployment_status(snapshot: dict[str, Any]) -> str:
     return str(deployment.get("status", "")) if isinstance(deployment, dict) else ""
 
 
+def scale_service(config: Config, token: str, instances: int) -> None:
+    request_json("POST", service_url(config, "/scale"), token, {"instances": instances})
+
+
 def build_list(config: Config, token: str) -> list[dict[str, Any]]:
     payload = request_json("GET", service_url(config, "/build"), token)
     builds = payload.get("builds")
@@ -160,7 +164,13 @@ def probe_health(config: Config, sleep: Callable[[float], None] = time.sleep) ->
     raise DeployError(f"Northflank health probe timed out: {last_error}")
 
 
-def run(config: Config, token: str, expected_sha: str, apply: bool) -> dict[str, Any]:
+def run(
+    config: Config,
+    token: str,
+    expected_sha: str,
+    apply: bool,
+    instances: int = 1,
+) -> dict[str, Any]:
     if not token:
         raise DeployError("NORTHFLANK_API_TOKEN is required")
     if not expected_sha or len(expected_sha) != 40:
@@ -171,6 +181,8 @@ def run(config: Config, token: str, expected_sha: str, apply: bool) -> dict[str,
     print(f"Current Northflank deployment: sha={current_sha or 'UNKNOWN'} status={current_status or 'UNKNOWN'}")
     if current_sha == expected_sha and current_status == "COMPLETED":
         if apply:
+            if instances > 0:
+                scale_service(config, token, instances)
             probe_health(config)
         return {"action": "noop", "deployed_sha": current_sha, "status": current_status}
     if not apply:
@@ -178,6 +190,8 @@ def run(config: Config, token: str, expected_sha: str, apply: bool) -> dict[str,
     build_id = start_build(config, token, expected_sha)
     build = wait_for_build(config, token, build_id)
     wait_for_deployment(config, token, expected_sha)
+    if instances > 0:
+        scale_service(config, token, instances)
     probe_health(config)
     return {"action": "deployed", "build_id": build_id, "build_sha": build.get("sha"), "deployed_sha": expected_sha}
 
@@ -188,6 +202,7 @@ def main() -> int:
     parser.add_argument("--project", default=os.environ.get("NORTHFLANK_PROJECT", DEFAULT_PROJECT))
     parser.add_argument("--service", default=os.environ.get("NORTHFLANK_SERVICE", DEFAULT_SERVICE))
     parser.add_argument("--base-url", default=os.environ.get("DAILI_USAGE_BASE_URL", DEFAULT_BASE_URL))
+    parser.add_argument("--instances", type=int, default=1)
     parser.add_argument("--apply", action="store_true")
     parser.add_argument("--timeout-seconds", type=int, default=1800)
     parser.add_argument("--poll-seconds", type=int, default=10)
@@ -200,7 +215,13 @@ def main() -> int:
         poll_seconds=args.poll_seconds,
     )
     try:
-        result = run(config, os.environ.get("NORTHFLANK_API_TOKEN", "").strip(), args.expected_sha, args.apply)
+        result = run(
+            config,
+            os.environ.get("NORTHFLANK_API_TOKEN", "").strip(),
+            args.expected_sha,
+            args.apply,
+            instances=args.instances,
+        )
     except Exception as exc:
         print(f"error: {exc}")
         return 1

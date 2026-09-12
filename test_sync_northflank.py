@@ -23,11 +23,27 @@ class NorthflankUsageDeployerTest(unittest.TestCase):
                 "deployment": {"internal": {"deployedSHA": SHA}},
                 "status": {"deployment": {"status": "COMPLETED"}},
             }),
+            patch.object(deployer, "scale_service") as scale,
             patch.object(deployer, "probe_health") as probe,
         ):
-            result = deployer.run(config, "token", SHA, apply=True)
+            result = deployer.run(config, "token", SHA, apply=True, instances=1)
         self.assertEqual(result["action"], "noop")
+        scale.assert_called_once_with(config, "token", 1)
         probe.assert_called_once_with(config)
+
+    def test_scale_service_posts_instances(self) -> None:
+        config = deployer.Config()
+        captured = {}
+
+        def fake_request(method, url, token, payload=None, timeout=30):
+            captured.update(method=method, url=url, token=token, payload=payload)
+            return {"data": {}}
+
+        with patch.object(deployer, "request_json", side_effect=fake_request):
+            deployer.scale_service(config, "token", 1)
+        self.assertEqual(captured["method"], "POST")
+        self.assertIn("/scale", captured["url"])
+        self.assertEqual(captured["payload"], {"instances": 1})
 
     def test_dry_run_never_starts_build(self) -> None:
         config = deployer.Config()
