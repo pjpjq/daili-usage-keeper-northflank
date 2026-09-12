@@ -62,6 +62,8 @@ type Config struct {
 	PricingSourceURL string
 	// WorkDir 是应用工作目录，数据库、日志和备份默认从这里派生。
 	WorkDir string
+	// DatabaseURL 是外部数据库（如 PostgreSQL）连接串，设置时优先于 SQLite。
+	DatabaseURL string
 	// SQLitePath 是 SQLite 数据库文件路径。
 	SQLitePath string
 	// BackupEnabled 控制是否保存 SQLite 数据库备份文件。
@@ -207,6 +209,13 @@ func Load(options LoadOptions) (*Config, error) {
 	}
 
 	workDir := getString("WORK_DIR", DefaultWorkDir)
+	databaseURL := strings.TrimSpace(os.Getenv("DATABASE_URL"))
+	if databaseURL == "" {
+		databaseURL = strings.TrimSpace(os.Getenv("POSTGRES_URL"))
+	}
+	if databaseURL == "" {
+		databaseURL = strings.TrimSpace(os.Getenv("POSTGRES_URI"))
+	}
 
 	cfg := &Config{
 		AppPort:                getString("APP_PORT", "8080"),
@@ -223,6 +232,7 @@ func Load(options LoadOptions) (*Config, error) {
 		PricingSyncInterval:    pricingSyncInterval,
 		PricingSourceURL:       getString("PRICING_SOURCE_URL", PricingSourceURLDefault),
 		WorkDir:                workDir,
+		DatabaseURL:            databaseURL,
 		SQLitePath:             filepath.Join(workDir, workDirDatabaseName),
 		BackupEnabled:          backupEnabled,
 		BackupDir:              filepath.Join(workDir, workDirBackupsName),

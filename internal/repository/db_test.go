@@ -3,6 +3,7 @@ package repository
 import (
 	"fmt"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -191,4 +192,32 @@ func closeTestDatabase(t *testing.T, db *gorm.DB) {
 			t.Fatalf("close database: %v", err)
 		}
 	})
+}
+
+func TestOpenDatabasePostgresBranchWithInvalidDSN(t *testing.T) {
+	cfg := config.Config{
+		DatabaseURL: "postgres://%invalid-dsn",
+	}
+
+	_, err := OpenDatabase(cfg)
+	if err == nil {
+		t.Fatal("expected OpenDatabase to fail with invalid postgres DSN, got nil")
+	}
+	if !strings.Contains(err.Error(), "open postgres database") {
+		t.Fatalf("expected postgres database error, got: %v", err)
+	}
+}
+
+func TestOpenDatabasePostgresBranchWithUnreachableHost(t *testing.T) {
+	cfg := config.Config{
+		DatabaseURL: "postgres://nonexistent:nonexistent@127.0.0.1:59999/dummy?connect_timeout=1",
+	}
+
+	_, err := OpenDatabase(cfg)
+	if err == nil {
+		t.Fatal("expected OpenDatabase to fail connecting to unreachable postgres, got nil")
+	}
+	if !strings.Contains(err.Error(), "open postgres database") && !strings.Contains(err.Error(), "auto migrate database") {
+		t.Fatalf("expected postgres connection/migration error, got: %v", err)
+	}
 }

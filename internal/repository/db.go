@@ -8,6 +8,7 @@ import (
 
 	"cpa-usage-keeper/internal/config"
 	"cpa-usage-keeper/internal/models"
+	"gorm.io/driver/postgres"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
@@ -18,32 +19,45 @@ type StorageCleanupResult struct {
 }
 
 func OpenDatabase(cfg config.Config) (*gorm.DB, error) {
-	dsn := sqliteDSN(cfg.SQLitePath)
-	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
-	if err != nil {
-		return nil, fmt.Errorf("open sqlite database %s: %w", filepath.Clean(cfg.SQLitePath), err)
+	var (
+		db  *gorm.DB
+		err error
+	)
+
+	if strings.TrimSpace(cfg.DatabaseURL) != "" {
+		db, err = gorm.Open(postgres.Open(strings.TrimSpace(cfg.DatabaseURL)), &gorm.Config{})
+		if err != nil {
+			return nil, fmt.Errorf("open postgres database: %w", err)
+		}
+	} else {
+		dsn := sqliteDSN(cfg.SQLitePath)
+		db, err = gorm.Open(sqlite.Open(dsn), &gorm.Config{})
+		if err != nil {
+			return nil, fmt.Errorf("open sqlite database %s: %w", filepath.Clean(cfg.SQLitePath), err)
+		}
+
+		sqlDB, err := db.DB()
+		if err != nil {
+			return nil, fmt.Errorf("configure sqlite database: %w", err)
+		}
+		sqlDB.SetMaxOpenConns(1)
+		sqlDB.SetMaxIdleConns(1)
+
+		if err := db.Exec("PRAGMA journal_mode=WAL").Error; err != nil {
+			return nil, fmt.Errorf("enable sqlite WAL: %w", err)
+		}
+		if err := db.Exec("PRAGMA busy_timeout=5000").Error; err != nil {
+			return nil, fmt.Errorf("set sqlite busy timeout: %w", err)
+		}
+		if err := db.Exec("PRAGMA foreign_keys=ON").Error; err != nil {
+			return nil, fmt.Errorf("enable sqlite foreign keys: %w", err)
+		}
+
+		if err := runSchemaMigrations(db); err != nil {
+			return nil, fmt.Errorf("run schema migrations: %w", err)
+		}
 	}
 
-	sqlDB, err := db.DB()
-	if err != nil {
-		return nil, fmt.Errorf("configure sqlite database: %w", err)
-	}
-	sqlDB.SetMaxOpenConns(1)
-	sqlDB.SetMaxIdleConns(1)
-
-	if err := db.Exec("PRAGMA journal_mode=WAL").Error; err != nil {
-		return nil, fmt.Errorf("enable sqlite WAL: %w", err)
-	}
-	if err := db.Exec("PRAGMA busy_timeout=5000").Error; err != nil {
-		return nil, fmt.Errorf("set sqlite busy timeout: %w", err)
-	}
-	if err := db.Exec("PRAGMA foreign_keys=ON").Error; err != nil {
-		return nil, fmt.Errorf("enable sqlite foreign keys: %w", err)
-	}
-
-	if err := runSchemaMigrations(db); err != nil {
-		return nil, fmt.Errorf("run schema migrations: %w", err)
-	}
 	if err := db.AutoMigrate(models.All()...); err != nil {
 		return nil, fmt.Errorf("auto migrate database: %w", err)
 	}
