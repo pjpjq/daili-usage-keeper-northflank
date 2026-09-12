@@ -1,6 +1,7 @@
 package repository
 
 import (
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -318,23 +319,40 @@ func BuildUsageOverviewWithFilter(db *gorm.DB, filter UsageQueryFilter) (*UsageO
 		return nil, fmt.Errorf("database is nil")
 	}
 
-	events, err := loadUsageOverviewEventsWithFilter(db, filter)
-	if err != nil {
-		return nil, err
-	}
 	pricingByModel, err := loadPriceSettingsByModel(db)
 	if err != nil {
 		return nil, err
 	}
 
-	return buildUsageOverviewFromEvents(events, filter, pricingByModel), nil
-}
+	latestHourlyStart, err := latestHourlySeriesStartFromDB(db, filter)
+	if err != nil {
+		return nil, err
+	}
 
-func buildUsageOverviewFromEvents(events []models.UsageEvent, filter UsageQueryFilter, pricingByModel map[string]models.ModelPriceSetting) *UsageOverviewRecord {
 	windowMinutes := computeWindowMinutes(filter)
 	bucketByDay := shouldBucketUsageOverviewByDay(filter, windowMinutes)
-	latestHourlyStart := latestHourlySeriesStart(filter, events)
-	overview := &UsageOverviewRecord{
+	overview := newUsageOverviewRecord(windowMinutes, filter)
+
+	hasEvents := false
+	err = streamUsageOverviewEventsWithFilter(db, filter, func(event models.UsageEvent) error {
+		hasEvents = true
+		applyUsageEventToSnapshot(overview.Usage, event, false)
+		applyUsageEventToOverview(overview, event, bucketByDay, latestHourlyStart, pricingByModel)
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	if !hasEvents {
+		return overview, nil
+	}
+
+	finalizeUsageOverview(overview, false)
+	return overview, nil
+}
+
+func newUsageOverviewRecord(windowMinutes int64, filter UsageQueryFilter) *UsageOverviewRecord {
+	return &UsageOverviewRecord{
 		Usage: &cpa.StatisticsSnapshot{
 			APIs:           map[string]cpa.APISnapshot{},
 			RequestsByDay:  map[string]int64{},
@@ -351,6 +369,13 @@ func buildUsageOverviewFromEvents(events []models.UsageEvent, filter UsageQueryF
 		DailySeries:  newUsageOverviewSeriesRecord(),
 		Health:       buildUsageOverviewHealth(filter),
 	}
+}
+
+func buildUsageOverviewFromEvents(events []models.UsageEvent, filter UsageQueryFilter, pricingByModel map[string]models.ModelPriceSetting) *UsageOverviewRecord {
+	windowMinutes := computeWindowMinutes(filter)
+	bucketByDay := shouldBucketUsageOverviewByDay(filter, windowMinutes)
+	latestHourlyStart := latestHourlySeriesStart(filter, events)
+	overview := newUsageOverviewRecord(windowMinutes, filter)
 	if len(events) == 0 {
 		return overview
 	}
@@ -373,16 +398,67 @@ func loadUsageEventsWithFilter(db *gorm.DB, filter UsageQueryFilter) ([]models.U
 	return events, nil
 }
 
-func loadUsageOverviewEventsWithFilter(db *gorm.DB, filter UsageQueryFilter) ([]models.UsageEvent, error) {
+func streamUsageOverviewEventsWithFilter(db *gorm.DB, filter UsageQueryFilter, fn func(event models.UsageEvent) error) error {
 	query := applyUsageEventsListFilter(db.Model(&models.UsageEvent{}), filter).
 		Select("api_group_key", "model", "timestamp", "failed", "input_tokens", "output_tokens", "reasoning_tokens", "cached_tokens", "total_tokens").
 		Order("timestamp asc")
 
+	rows, err := query.Rows()
+	if err != nil {
+		return fmt.Errorf("load usage overview events: %w", err)
+	}
+	defer rows.Close()
+
+	var event models.UsageEvent
+	for rows.Next() {
+		event = models.UsageEvent{}
+		if err := db.ScanRows(rows, &event); err != nil {
+			return fmt.Errorf("scan usage overview event: %w", err)
+		}
+		if err := fn(event); err != nil {
+			return err
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("iterate usage overview events: %w", err)
+	}
+	return nil
+}
+
+func loadUsageOverviewEventsWithFilter(db *gorm.DB, filter UsageQueryFilter) ([]models.UsageEvent, error) {
 	var events []models.UsageEvent
-	if err := query.Find(&events).Error; err != nil {
-		return nil, fmt.Errorf("load usage overview events: %w", err)
+	err := streamUsageOverviewEventsWithFilter(db, filter, func(event models.UsageEvent) error {
+		events = append(events, event)
+		return nil
+	})
+	if err != nil {
+		return nil, err
 	}
 	return events, nil
+}
+
+func latestHourlySeriesStartFromDB(db *gorm.DB, filter UsageQueryFilter) (*time.Time, error) {
+	if filter.EndTime != nil {
+		end := filter.EndTime.UTC()
+		currentHour := end.Truncate(time.Hour)
+		start := currentHour.Add(-23 * time.Hour)
+		return &start, nil
+	}
+	var latest models.UsageEvent
+	err := applyUsageEventsListFilter(db.Model(&models.UsageEvent{}), filter).
+		Select("timestamp").
+		Order("timestamp desc").
+		Limit(1).
+		Take(&latest).Error
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("load latest event timestamp: %w", err)
+	}
+	currentHour := latest.Timestamp.UTC().Truncate(time.Hour)
+	start := currentHour.Add(-23 * time.Hour)
+	return &start, nil
 }
 
 func buildUsageSnapshotFromEvents(events []models.UsageEvent) *cpa.StatisticsSnapshot {

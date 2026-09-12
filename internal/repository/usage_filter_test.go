@@ -1,6 +1,7 @@
 package repository
 
 import (
+	"fmt"
 	"math"
 	"path/filepath"
 	"reflect"
@@ -661,5 +662,64 @@ func TestBuildUsageOverviewWithFilterUsesDailyBucketsForLongCustomRanges(t *test
 	}
 	if _, ok := overview.Series.Requests["2026-04-20T08:00:00Z"]; ok {
 		t.Fatalf("expected long custom range not to keep hourly buckets, got %+v", overview.Series.Requests)
+	}
+}
+
+func TestBuildUsageOverviewWithFilterStreamingMatchesFromEvents(t *testing.T) {
+	withRepositoryTestLocation(t, "Asia/Shanghai")
+	db, err := OpenDatabase(config.Config{SQLitePath: filepath.Join(t.TempDir(), "usage-overview-streaming.db")})
+	if err != nil {
+		t.Fatalf("OpenDatabase returned error: %v", err)
+	}
+	closeTestDatabase(t, db)
+
+	baseTime := time.Date(2026, 4, 20, 0, 0, 0, 0, time.UTC)
+	const count = 1000
+	events := make([]models.UsageEvent, count)
+	for i := 0; i < count; i++ {
+		events[i] = models.UsageEvent{
+			EventKey:     fmt.Sprintf("event-stream-%d", i),
+			APIGroupKey:  fmt.Sprintf("provider-%d", i%3),
+			Model:        "claude-sonnet",
+			Timestamp:    baseTime.Add(time.Duration(i) * time.Minute),
+			InputTokens:  100,
+			OutputTokens: 50,
+			TotalTokens:  150,
+			Failed:       i%10 == 0,
+		}
+	}
+	if _, _, err := InsertUsageEvents(db, events); err != nil {
+		t.Fatalf("InsertUsageEvents returned error: %v", err)
+	}
+
+	start := baseTime
+	end := baseTime.Add(time.Duration(count) * time.Minute)
+	filter := UsageQueryFilter{Range: "custom", StartTime: &start, EndTime: &end}
+
+	overviewFromDB, err := BuildUsageOverviewWithFilter(db, filter)
+	if err != nil {
+		t.Fatalf("BuildUsageOverviewWithFilter returned error: %v", err)
+	}
+
+	pricingByModel, err := loadPriceSettingsByModel(db)
+	if err != nil {
+		t.Fatalf("loadPriceSettingsByModel returned error: %v", err)
+	}
+	overviewFromEvents := buildUsageOverviewFromEvents(events, filter, pricingByModel)
+
+	if overviewFromDB.Summary.RequestCount != overviewFromEvents.Summary.RequestCount {
+		t.Fatalf("request count mismatch: db=%d events=%d", overviewFromDB.Summary.RequestCount, overviewFromEvents.Summary.RequestCount)
+	}
+	if overviewFromDB.Summary.TokenCount != overviewFromEvents.Summary.TokenCount {
+		t.Fatalf("token count mismatch: db=%d events=%d", overviewFromDB.Summary.TokenCount, overviewFromEvents.Summary.TokenCount)
+	}
+	if overviewFromDB.Health.TotalSuccess != overviewFromEvents.Health.TotalSuccess {
+		t.Fatalf("health success mismatch: db=%d events=%d", overviewFromDB.Health.TotalSuccess, overviewFromEvents.Health.TotalSuccess)
+	}
+	if overviewFromDB.Health.TotalFailure != overviewFromEvents.Health.TotalFailure {
+		t.Fatalf("health failure mismatch: db=%d events=%d", overviewFromDB.Health.TotalFailure, overviewFromEvents.Health.TotalFailure)
+	}
+	if len(overviewFromDB.Series.Requests) != len(overviewFromEvents.Series.Requests) {
+		t.Fatalf("series requests length mismatch: db=%d events=%d", len(overviewFromDB.Series.Requests), len(overviewFromEvents.Series.Requests))
 	}
 }
