@@ -306,12 +306,22 @@ func BuildUsageSnapshotWithFilter(db *gorm.DB, filter UsageQueryFilter) (*cpa.St
 		return nil, fmt.Errorf("database is nil")
 	}
 
-	events, err := loadUsageEventsWithFilter(db, filter)
+	snapshot := &cpa.StatisticsSnapshot{
+		APIs:           map[string]cpa.APISnapshot{},
+		RequestsByDay:  map[string]int64{},
+		RequestsByHour: map[string]int64{},
+		TokensByDay:    map[string]int64{},
+		TokensByHour:   map[string]int64{},
+	}
+	err := streamUsageOverviewEventsWithFilter(db, filter, func(event models.UsageEvent) error {
+		applyUsageEventToSnapshot(snapshot, event, true)
+		return nil
+	})
 	if err != nil {
 		return nil, err
 	}
-
-	return buildUsageSnapshotFromEvents(events), nil
+	finalizeUsageSnapshot(snapshot, true)
+	return snapshot, nil
 }
 
 func BuildUsageOverviewWithFilter(db *gorm.DB, filter UsageQueryFilter) (*UsageOverviewRecord, error) {
@@ -389,11 +399,13 @@ func buildUsageOverviewFromEvents(events []models.UsageEvent, filter UsageQueryF
 }
 
 func loadUsageEventsWithFilter(db *gorm.DB, filter UsageQueryFilter) ([]models.UsageEvent, error) {
-	query := applyUsageEventsListFilter(db.Model(&models.UsageEvent{}), filter).Order("timestamp asc")
-
 	var events []models.UsageEvent
-	if err := query.Find(&events).Error; err != nil {
-		return nil, fmt.Errorf("load usage events: %w", err)
+	err := streamUsageOverviewEventsWithFilter(db, filter, func(event models.UsageEvent) error {
+		events = append(events, event)
+		return nil
+	})
+	if err != nil {
+		return nil, err
 	}
 	return events, nil
 }
