@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
@@ -22,11 +23,20 @@ type RedisQueueClient struct {
 	queueKey      string
 	batchSize     int
 	httpClient    *Client
+	shards        int
+	currentShard  atomic.Uint64
 }
 
 func NewRedisQueueClient(baseURL, redisQueueAddr, managementKey string, timeout time.Duration, queueKey string, batchSize int) *RedisQueueClient {
+	return NewRedisQueueClientWithShards(baseURL, redisQueueAddr, managementKey, timeout, queueKey, batchSize, 1)
+}
+
+func NewRedisQueueClientWithShards(baseURL, redisQueueAddr, managementKey string, timeout time.Duration, queueKey string, batchSize int, shards int) *RedisQueueClient {
 	trimmedBaseURL := strings.TrimSpace(baseURL)
 	trimmedQueueAddr := strings.TrimSpace(redisQueueAddr)
+	if shards <= 0 {
+		shards = 1
+	}
 	return &RedisQueueClient{
 		address:       redisQueueAddress(trimmedBaseURL, trimmedQueueAddr),
 		managementKey: strings.TrimSpace(managementKey),
@@ -34,6 +44,7 @@ func NewRedisQueueClient(baseURL, redisQueueAddr, managementKey string, timeout 
 		queueKey:      strings.TrimSpace(queueKey),
 		batchSize:     batchSize,
 		httpClient:    NewClient(trimmedBaseURL, managementKey, timeout),
+		shards:        shards,
 	}
 }
 
@@ -91,7 +102,28 @@ func (c *RedisQueueClient) popUsageOverHTTP(ctx context.Context) ([]string, erro
 	if c == nil || c.httpClient == nil {
 		return nil, fmt.Errorf("redis queue http client is nil")
 	}
-	result, err := c.httpClient.FetchUsageQueue(ctx, c.batchSize)
+	if c.shards <= 1 {
+		return c.fetchUsageMessages(ctx, "")
+	}
+
+	startIdx := int((c.currentShard.Add(1) - 1) % uint64(c.shards))
+	for i := 0; i < c.shards; i++ {
+		shard := (startIdx + i) % c.shards
+		ip := redisQueueShardForwardedFor(shard)
+		messages, err := c.fetchUsageMessages(ctx, ip)
+		if err != nil {
+			return nil, err
+		}
+		if len(messages) > 0 {
+			c.currentShard.Store(uint64(shard + 1))
+			return messages, nil
+		}
+	}
+	return nil, nil
+}
+
+func (c *RedisQueueClient) fetchUsageMessages(ctx context.Context, forwardedFor string) ([]string, error) {
+	result, err := c.httpClient.FetchUsageQueueWithForwardedFor(ctx, c.batchSize, forwardedFor)
 	if err != nil {
 		return nil, fmt.Errorf("fetch usage queue over http: %w", err)
 	}
@@ -104,6 +136,10 @@ func (c *RedisQueueClient) popUsageOverHTTP(ctx context.Context) ([]string, erro
 		messages = append(messages, trimmed)
 	}
 	return messages, nil
+}
+
+func redisQueueShardForwardedFor(shard int) string {
+	return fmt.Sprintf("10.0.%d.%d", (shard/250)%256, (shard%250)+1)
 }
 
 func (c *RedisQueueClient) openAuthenticatedConnection(ctx context.Context) (net.Conn, *bufio.Reader, error) {

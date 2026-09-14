@@ -72,6 +72,7 @@ cp .env.example .env
 | `TZ` | No | `Asia/Shanghai` | Project business timezone; affects Today, daily aggregation, scheduled tasks, and log timestamps |
 | `REDIS_QUEUE_ADDR` | No | `CPA_BASE_URL` hostname + `8317` | CPA Redis/RESP TCP address; set `host:port` for non-default ports |
 | `REDIS_QUEUE_BATCH_SIZE` | No | `1000` | Maximum queue records per pull |
+| `REDIS_QUEUE_SHARDS` | No | `16` | HTTP usage queue pull shard (IP round-robin) count for multi-replica Envoy consistent-hash setups |
 | `REDIS_QUEUE_IDLE_INTERVAL` | No | `1s` | Empty queue check interval |
 | `METADATA_SYNC_INTERVAL` | No | `30s` | Auth-file and provider metadata refresh interval |
 | `REQUEST_TIMEOUT` | No | `30s` | CPA request timeout |

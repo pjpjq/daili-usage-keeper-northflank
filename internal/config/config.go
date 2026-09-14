@@ -18,6 +18,7 @@ const (
 	DefaultTimeZone               = "Asia/Shanghai"
 	RedisQueueKeyDefault          = cpa.ManagementUsageQueueKey
 	RedisQueueErrorBackoffDefault = 10 * time.Second
+	RedisQueueShardsDefault       = 16
 	MetadataSyncIntervalDefault   = 30 * time.Second
 	PricingSyncIntervalDefault    = 6 * time.Hour
 	PricingSourceURLDefault       = "https://models.dev/api.json"
@@ -48,6 +49,8 @@ type Config struct {
 	RedisQueueKey string
 	// RedisQueueBatchSize 是单次 Redis LPOP 最多拉取的消息数。
 	RedisQueueBatchSize int
+	// RedisQueueShards 是 HTTP usage 队列拉取时的分片（IP 轮询）数，用于覆盖多副本 Envoy consistent-hash。
+	RedisQueueShards int
 	// RedisQueueIdleInterval 是 Redis 队列为空时的下一次检查间隔。
 	RedisQueueIdleInterval time.Duration
 	// RedisQueueErrorBackoff 是 Redis 临时错误后的固定退避间隔。
@@ -123,6 +126,14 @@ func Load(options LoadOptions) (*Config, error) {
 	}
 	if redisQueueBatchSize <= 0 {
 		return nil, fmt.Errorf("REDIS_QUEUE_BATCH_SIZE must be positive")
+	}
+
+	redisQueueShards, err := getInt("REDIS_QUEUE_SHARDS", RedisQueueShardsDefault)
+	if err != nil {
+		return nil, err
+	}
+	if redisQueueShards <= 0 {
+		return nil, fmt.Errorf("REDIS_QUEUE_SHARDS must be positive")
 	}
 
 	redisQueueIdleInterval, err := getDuration("REDIS_QUEUE_IDLE_INTERVAL", time.Second)
@@ -225,6 +236,7 @@ func Load(options LoadOptions) (*Config, error) {
 		RedisQueueAddr:         strings.TrimSpace(os.Getenv("REDIS_QUEUE_ADDR")),
 		RedisQueueKey:          RedisQueueKeyDefault,
 		RedisQueueBatchSize:    redisQueueBatchSize,
+		RedisQueueShards:       redisQueueShards,
 		RedisQueueIdleInterval: redisQueueIdleInterval,
 		RedisQueueErrorBackoff: RedisQueueErrorBackoffDefault,
 		MetadataSyncInterval:   metadataSyncInterval,

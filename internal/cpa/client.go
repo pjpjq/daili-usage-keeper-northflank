@@ -55,6 +55,10 @@ func (c *Client) doJSONRequest(ctx context.Context, path string, target any, kin
 }
 
 func (c *Client) doManagementJSONRequest(ctx context.Context, path string, target any, kind string) (int, []byte, error) {
+	return c.doManagementJSONRequestWithForwardedFor(ctx, path, target, kind, "")
+}
+
+func (c *Client) doManagementJSONRequestWithForwardedFor(ctx context.Context, path string, target any, kind string, forwardedFor string) (int, []byte, error) {
 	if c == nil {
 		return 0, nil, fmt.Errorf("cpa client is nil")
 	}
@@ -63,6 +67,9 @@ func (c *Client) doManagementJSONRequest(ctx context.Context, path string, targe
 	}
 	return c.doJSONRequest(ctx, path, target, "management "+kind, func(req *http.Request) {
 		req.Header.Set("Authorization", "Bearer "+c.managementKey)
+		if strings.TrimSpace(forwardedFor) != "" {
+			req.Header.Set("X-Forwarded-For", strings.TrimSpace(forwardedFor))
+		}
 	})
 }
 
@@ -88,12 +95,16 @@ func (c *Client) FetchExternalAPIKeys(ctx context.Context) (*ExternalAPIKeysResu
 }
 
 func (c *Client) FetchUsageQueue(ctx context.Context, count int) (*UsageQueueResult, error) {
+	return c.FetchUsageQueueWithForwardedFor(ctx, count, "")
+}
+
+func (c *Client) FetchUsageQueueWithForwardedFor(ctx context.Context, count int, forwardedFor string) (*UsageQueueResult, error) {
 	result := &UsageQueueResult{}
 	if count <= 0 {
 		return result, fmt.Errorf("usage queue count must be positive")
 	}
 	queryPath := cpaManagementUsageQueueEndpoint + "?count=" + url.QueryEscape(strconv.Itoa(count))
-	statusCode, body, err := c.doManagementJSONRequest(ctx, queryPath, &result.Payload, "usage queue")
+	statusCode, body, err := c.doManagementJSONRequestWithForwardedFor(ctx, queryPath, &result.Payload, "usage queue", forwardedFor)
 	result.StatusCode = statusCode
 	result.Body = body
 	if err != nil {

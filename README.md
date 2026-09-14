@@ -81,6 +81,7 @@ cp .env.example .env
 | `TZ` | 否 | `Asia/Shanghai` | 项目业务时区，影响 Today、按天聚合、定时任务和日志时间 |
 | `REDIS_QUEUE_ADDR` | 否 | `CPA_BASE_URL` 主机名 + `8317` | CPA Redis/RESP TCP 地址；非默认端口时填写 `host:port` |
 | `REDIS_QUEUE_BATCH_SIZE` | 否 | `1000` | 每次最多拉取的队列记录数 |
+| `REDIS_QUEUE_SHARDS` | 否 | `16` | HTTP usage 队列拉取分片（IP 轮询）数，用于多副本 Envoy consistent-hash 场景 |
 | `REDIS_QUEUE_IDLE_INTERVAL` | 否 | `1s` | 队列为空时的检查间隔 |
 | `METADATA_SYNC_INTERVAL` | 否 | `30s` | auth files 与 provider 元数据刷新间隔 |
 | `REQUEST_TIMEOUT` | 否 | `30s` | CPA 请求超时 |

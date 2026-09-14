@@ -73,6 +73,35 @@ func TestFetchUsageQueueRejectsNonPositiveCount(t *testing.T) {
 	}
 }
 
+func TestFetchUsageQueueWithForwardedForSetsHeader(t *testing.T) {
+	recordedForwardedFor := ""
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		recordedForwardedFor = r.Header.Get("X-Forwarded-For")
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`[]`))
+	}))
+	defer server.Close()
+
+	client := NewClient(server.URL, "management-secret", 2*time.Second)
+
+	_, err := client.FetchUsageQueueWithForwardedFor(context.Background(), 1, "10.0.0.5")
+	if err != nil {
+		t.Fatalf("FetchUsageQueueWithForwardedFor returned error: %v", err)
+	}
+	if recordedForwardedFor != "10.0.0.5" {
+		t.Fatalf("expected X-Forwarded-For header to be 10.0.0.5, got %q", recordedForwardedFor)
+	}
+
+	recordedForwardedFor = "initial"
+	_, err = client.FetchUsageQueueWithForwardedFor(context.Background(), 1, "")
+	if err != nil {
+		t.Fatalf("FetchUsageQueueWithForwardedFor returned error: %v", err)
+	}
+	if recordedForwardedFor != "" {
+		t.Fatalf("expected X-Forwarded-For header to be empty, got %q", recordedForwardedFor)
+	}
+}
+
 func TestFetchModelsUsesExternalAPIKeyAndParsesOpenAICompatibleResponse(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {

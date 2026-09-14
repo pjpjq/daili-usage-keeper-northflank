@@ -12,7 +12,7 @@ import (
 
 var configEnvKeys = []string{
 	"APP_PORT", "APP_BASE_PATH", "WORK_DIR", "CPA_BASE_URL", "CPA_MANAGEMENT_KEY", "POLL_INTERVAL",
-	"USAGE_SYNC_MODE", "REDIS_QUEUE_ADDR", "REDIS_QUEUE_BATCH_SIZE", "REDIS_QUEUE_IDLE_INTERVAL",
+	"USAGE_SYNC_MODE", "REDIS_QUEUE_ADDR", "REDIS_QUEUE_BATCH_SIZE", "REDIS_QUEUE_SHARDS", "REDIS_QUEUE_IDLE_INTERVAL",
 	"METADATA_SYNC_INTERVAL",
 	"SQLITE_PATH", "BACKUP_ENABLED", "BACKUP_DIR", "BACKUP_INTERVAL", "BACKUP_RETENTION_DAYS",
 	"REQUEST_TIMEOUT", "LOG_LEVEL", "LOG_FILE_ENABLED", "LOG_DIR", "LOG_RETENTION_DAYS",
@@ -136,6 +136,9 @@ func TestLoadFromEnvAppliesDefaults(t *testing.T) {
 	}
 	if cfg.RedisQueueBatchSize != 1000 {
 		t.Fatalf("expected default redis queue batch size 1000, got %d", cfg.RedisQueueBatchSize)
+	}
+	if cfg.RedisQueueShards != RedisQueueShardsDefault {
+		t.Fatalf("expected default redis queue shards %d, got %d", RedisQueueShardsDefault, cfg.RedisQueueShards)
 	}
 	if cfg.RedisQueueIdleInterval != time.Second {
 		t.Fatalf("expected default redis queue idle interval 1s, got %s", cfg.RedisQueueIdleInterval)
@@ -423,6 +426,21 @@ func TestLoadFromEnvRejectsNonPositiveRedisQueueBatchSize(t *testing.T) {
 	}
 }
 
+func TestLoadFromEnvRejectsNonPositiveRedisQueueShards(t *testing.T) {
+	for _, value := range []string{"0", "-1"} {
+		t.Run(value, func(t *testing.T) {
+			t.Setenv("CPA_BASE_URL", "http://127.0.0.1:"+cpa.ManagementRedisDefaultPort)
+			t.Setenv("CPA_MANAGEMENT_KEY", "secret")
+			t.Setenv("REDIS_QUEUE_SHARDS", value)
+
+			_, err := LoadFromEnv()
+			if err == nil || err.Error() != "REDIS_QUEUE_SHARDS must be positive" {
+				t.Fatalf("expected REDIS_QUEUE_SHARDS validation error, got %v", err)
+			}
+		})
+	}
+}
+
 func TestLoadFromEnvParsesOverrides(t *testing.T) {
 	t.Setenv("CPA_BASE_URL", "http://127.0.0.1:"+cpa.ManagementRedisDefaultPort)
 	t.Setenv("CPA_MANAGEMENT_KEY", "secret")
@@ -439,6 +457,7 @@ func TestLoadFromEnvParsesOverrides(t *testing.T) {
 	t.Setenv("AUTH_ENABLED", "true")
 	t.Setenv("LOGIN_PASSWORD", "top-secret")
 	t.Setenv("AUTH_SESSION_TTL", "12h")
+	t.Setenv("REDIS_QUEUE_SHARDS", "8")
 	t.Setenv("REDIS_QUEUE_IDLE_INTERVAL", "2s")
 	t.Setenv("METADATA_SYNC_INTERVAL", "5m")
 	t.Setenv("PRICING_SYNC_ENABLED", "false")
@@ -450,7 +469,7 @@ func TestLoadFromEnvParsesOverrides(t *testing.T) {
 		t.Fatalf("LoadFromEnv returned error: %v", err)
 	}
 
-	if cfg.AppPort != "9090" || cfg.AppBasePath != "/cpa" || cfg.WorkDir != "/tmp/work" || cfg.SQLitePath != filepath.Join("/tmp/work", "app.db") || cfg.BackupEnabled || cfg.BackupDir != filepath.Join("/tmp/work", "backups") || cfg.BackupInterval != 2*time.Hour || cfg.BackupRetentionDays != 7 || cfg.RequestTimeout != 15*time.Second || cfg.LogLevel != "debug" || cfg.LogFileEnabled || cfg.LogDir != filepath.Join("/tmp/work", "logs") || cfg.LogRetentionDays != 14 || !cfg.AuthEnabled || cfg.LoginPassword != "top-secret" || cfg.AuthSessionTTL != 12*time.Hour || cfg.RedisQueueIdleInterval != 2*time.Second || cfg.MetadataSyncInterval != 5*time.Minute || cfg.PricingSyncEnabled || cfg.PricingSyncInterval != 12*time.Hour || cfg.PricingSourceURL != "https://pricing.example.com/api.json" {
+	if cfg.AppPort != "9090" || cfg.AppBasePath != "/cpa" || cfg.WorkDir != "/tmp/work" || cfg.SQLitePath != filepath.Join("/tmp/work", "app.db") || cfg.BackupEnabled || cfg.BackupDir != filepath.Join("/tmp/work", "backups") || cfg.BackupInterval != 2*time.Hour || cfg.BackupRetentionDays != 7 || cfg.RequestTimeout != 15*time.Second || cfg.LogLevel != "debug" || cfg.LogFileEnabled || cfg.LogDir != filepath.Join("/tmp/work", "logs") || cfg.LogRetentionDays != 14 || !cfg.AuthEnabled || cfg.LoginPassword != "top-secret" || cfg.AuthSessionTTL != 12*time.Hour || cfg.RedisQueueShards != 8 || cfg.RedisQueueIdleInterval != 2*time.Second || cfg.MetadataSyncInterval != 5*time.Minute || cfg.PricingSyncEnabled || cfg.PricingSyncInterval != 12*time.Hour || cfg.PricingSourceURL != "https://pricing.example.com/api.json" {
 		t.Fatalf("unexpected config override result: %+v", cfg)
 	}
 }

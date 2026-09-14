@@ -230,3 +230,121 @@ func ctxWithTimeout(t *testing.T) context.Context {
 	t.Cleanup(cancel)
 	return ctx
 }
+
+func TestRedisQueueClientWithShardsDefaults(t *testing.T) {
+	c1 := NewRedisQueueClient("http://cpa.example.com", "", "secret", time.Second, ManagementUsageQueueKey, 100)
+	if c1.shards != 1 {
+		t.Fatalf("expected NewRedisQueueClient to have shards=1, got %d", c1.shards)
+	}
+
+	c2 := NewRedisQueueClientWithShards("http://cpa.example.com", "", "secret", time.Second, ManagementUsageQueueKey, 100, 0)
+	if c2.shards != 1 {
+		t.Fatalf("expected non-positive shards to normalize to 1, got %d", c2.shards)
+	}
+
+	c3 := NewRedisQueueClientWithShards("http://cpa.example.com", "", "secret", time.Second, ManagementUsageQueueKey, 100, -3)
+	if c3.shards != 1 {
+		t.Fatalf("expected negative shards to normalize to 1, got %d", c3.shards)
+	}
+
+	c4 := NewRedisQueueClientWithShards("http://cpa.example.com", "", "secret", time.Second, ManagementUsageQueueKey, 100, 16)
+	if c4.shards != 16 {
+		t.Fatalf("expected explicit shards 16, got %d", c4.shards)
+	}
+}
+
+func TestRedisQueueClientHTTPFallbackWithShardsRotatesAndReturnsImmediatelyOnHit(t *testing.T) {
+	var requestedHeaders []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		h := r.Header.Get("X-Forwarded-For")
+		requestedHeaders = append(requestedHeaders, h)
+		w.Header().Set("Content-Type", "application/json")
+		switch h {
+		case "10.0.0.1":
+			_, _ = w.Write([]byte(`[]`))
+		case "10.0.0.2":
+			_, _ = w.Write([]byte(`[{"hit":"shard-2"}]`))
+		case "10.0.0.3":
+			_, _ = w.Write([]byte(`[{"hit":"shard-3"}]`))
+		default:
+			_, _ = w.Write([]byte(`[]`))
+		}
+	}))
+	defer server.Close()
+
+	client := NewRedisQueueClientWithShards(server.URL, "127.0.0.1:1", "secret", 10*time.Millisecond, ManagementUsageQueueKey, 2, 4)
+	client.httpClient.httpClient = server.Client()
+
+	// First call: shard 1 is empty, shard 2 hits -> returns immediately without querying shard 3 or 4
+	messages, err := client.PopUsage(ctxWithTimeout(t))
+	if err != nil {
+		t.Fatalf("first PopUsage error: %v", err)
+	}
+	if len(messages) != 1 || messages[0] != `{"hit":"shard-2"}` {
+		t.Fatalf("unexpected first messages: %#v", messages)
+	}
+	if len(requestedHeaders) != 2 || requestedHeaders[0] != "10.0.0.1" || requestedHeaders[1] != "10.0.0.2" {
+		t.Fatalf("expected headers [10.0.0.1 10.0.0.2], got %#v", requestedHeaders)
+	}
+
+	// Second call: should start probing at shard 3 (10.0.0.3)
+	requestedHeaders = nil
+	messages, err = client.PopUsage(ctxWithTimeout(t))
+	if err != nil {
+		t.Fatalf("second PopUsage error: %v", err)
+	}
+	if len(messages) != 1 || messages[0] != `{"hit":"shard-3"}` {
+		t.Fatalf("unexpected second messages: %#v", messages)
+	}
+	if len(requestedHeaders) != 1 || requestedHeaders[0] != "10.0.0.3" {
+		t.Fatalf("expected second headers [10.0.0.3], got %#v", requestedHeaders)
+	}
+}
+
+func TestRedisQueueClientHTTPFallbackAllShardsEmptyQueriesAllShards(t *testing.T) {
+	var requestedHeaders []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestedHeaders = append(requestedHeaders, r.Header.Get("X-Forwarded-For"))
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`[]`))
+	}))
+	defer server.Close()
+
+	client := NewRedisQueueClientWithShards(server.URL, "127.0.0.1:1", "secret", 10*time.Millisecond, ManagementUsageQueueKey, 2, 3)
+	client.httpClient.httpClient = server.Client()
+
+	messages, err := client.PopUsage(ctxWithTimeout(t))
+	if err != nil {
+		t.Fatalf("PopUsage error: %v", err)
+	}
+	if len(messages) != 0 {
+		t.Fatalf("expected empty messages, got %#v", messages)
+	}
+	if len(requestedHeaders) != 3 || requestedHeaders[0] != "10.0.0.1" || requestedHeaders[1] != "10.0.0.2" || requestedHeaders[2] != "10.0.0.3" {
+		t.Fatalf("expected all 3 shards queried [10.0.0.1 10.0.0.2 10.0.0.3], got %#v", requestedHeaders)
+	}
+}
+
+func TestRedisQueueClientHTTPFallbackSingleShardOmitsForwardedFor(t *testing.T) {
+	var requestedHeaders []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestedHeaders = append(requestedHeaders, r.Header.Get("X-Forwarded-For"))
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`[{"single":true}]`))
+	}))
+	defer server.Close()
+
+	client := NewRedisQueueClientWithShards(server.URL, "127.0.0.1:1", "secret", 10*time.Millisecond, ManagementUsageQueueKey, 2, 1)
+	client.httpClient.httpClient = server.Client()
+
+	messages, err := client.PopUsage(ctxWithTimeout(t))
+	if err != nil {
+		t.Fatalf("PopUsage error: %v", err)
+	}
+	if len(messages) != 1 || messages[0] != `{"single":true}` {
+		t.Fatalf("unexpected messages: %#v", messages)
+	}
+	if len(requestedHeaders) != 1 || requestedHeaders[0] != "" {
+		t.Fatalf("expected empty X-Forwarded-For header, got %#v", requestedHeaders)
+	}
+}
