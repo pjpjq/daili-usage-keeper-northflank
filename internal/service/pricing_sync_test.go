@@ -21,6 +21,95 @@ func (s pricingSyncModelsFetcher) FetchModels(context.Context) (*cpa.ModelsResul
 	return s.result, s.err
 }
 
+type pricingSyncAliasFetcher struct {
+	pricingSyncModelsFetcher
+	aliases []cpa.ModelAlias
+}
+
+func (s pricingSyncAliasFetcher) FetchModelAliases(context.Context) ([]cpa.ModelAlias, error) {
+	return s.aliases, nil
+}
+
+func TestExternalPricingSyncerPricesUpstreamNamesThroughAliasesAndNameMatches(t *testing.T) {
+	db := openPricingServiceTestDatabase(t)
+	catalog := `{
+		"anthropic":{"models":{"claude-opus-5-5":{"id":"claude-opus-5-5","name":"Claude Opus 5.5","cost":{"input":4,"output":20,"cache_read":0.2}}}},
+		"deepseek":{"models":{
+			"deepseek-flash":{"id":"deepseek-flash","name":"DeepSeek V4.1 Flash 1017","cost":{"input":0.15,"output":0.6,"cache_read":0.003}},
+			"deepseek-v4-flash":{"id":"deepseek-v4-flash","name":"DeepSeek V4 Flash","cost":{"input":0.15,"output":0.6,"cache_read":0.003}}
+		}},
+		"zai":{"models":{"glm-5.3":{"id":"glm-5.3","name":"GLM-5.3","cost":{"input":1.4,"output":4.4,"cache_read":0.26}},"glm-5.2":{"id":"glm-5.2","name":"GLM-5.2","cost":{"input":1.4,"output":4.4,"cache_read":0.26}}}},
+		"sensenova":{"models":{"glm-5.2":{"id":"glm-5.2","name":"GLM-5.2","cost":{"input":0,"output":0,"cache_read":0}}}}
+	}`
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(catalog))
+	}))
+	defer server.Close()
+
+	fetcher := pricingSyncAliasFetcher{
+		pricingSyncModelsFetcher: pricingSyncModelsFetcher{result: &cpa.ModelsResult{
+			Payload: cpa.ModelsResponse{Data: []cpa.ModelInfo{
+				{ID: "claude-opus-5.5", OwnedBy: "anthropic"},
+				{ID: "deepseek-v4.1-flash", OwnedBy: "tokenharbor"},
+				{ID: "glm-5.3", OwnedBy: "evroc"},
+				{ID: "glm-5.2", OwnedBy: "sensenova"},
+				{ID: "nemotron-3.5-super-vl", OwnedBy: "cline"},
+			}},
+		}},
+		aliases: []cpa.ModelAlias{
+			{Name: "devin/claude-opus-5-5", Alias: "claude-opus-5.5"},
+			{Name: "deepseek-4.1-flash", Alias: "deepseek-v4.1-flash"},
+			{Name: "zai-org/GLM-5.3", Alias: "glm-5.3"},
+			{Name: "deepseek-v4.1-flash:free", Alias: "deepseek-v4.1-flash"},
+			{Name: "cline-free/nemotron-3.5-super-vl", Alias: "nemotron-3.5-super-vl"},
+			{Name: "dots3-note-prev", Alias: "unpriced-alias"},
+		},
+	}
+	syncer := NewExternalPricingSyncer(db, fetcher, server.Client(), server.URL)
+	if err := syncer.SyncPricing(context.Background()); err != nil {
+		t.Fatalf("SyncPricing returned error: %v", err)
+	}
+
+	settings, err := repository.ListModelPriceSettings(db)
+	if err != nil {
+		t.Fatalf("list synced pricing: %v", err)
+	}
+	byModel := make(map[string]models.ModelPriceSetting, len(settings))
+	for _, setting := range settings {
+		byModel[setting.Model] = setting
+	}
+	assertSyncedPrice(t, byModel["claude-opus-5.5"], 4, 20, 0.2)
+	assertSyncedPrice(t, byModel["devin/claude-opus-5-5"], 4, 20, 0.2)
+	assertSyncedPrice(t, byModel["deepseek-v4.1-flash"], 0.15, 0.6, 0.003)
+	assertSyncedPrice(t, byModel["deepseek-4.1-flash"], 0.15, 0.6, 0.003)
+	assertSyncedPrice(t, byModel["glm-5.3"], 1.4, 4.4, 0.26)
+	assertSyncedPrice(t, byModel["zai-org/GLM-5.3"], 1.4, 4.4, 0.26)
+	assertSyncedPrice(t, byModel["glm-5.2"], 0, 0, 0)
+	assertSyncedPrice(t, byModel["deepseek-v4.1-flash:free"], 0, 0, 0)
+	assertSyncedPrice(t, byModel["cline-free/nemotron-3.5-super-vl"], 0, 0, 0)
+	for _, model := range []string{"nemotron-3.5-super-vl", "dots3-note-prev"} {
+		if _, ok := byModel[model]; ok {
+			t.Fatalf("expected %s to remain unpriced", model)
+		}
+	}
+}
+
+func TestIsFreeModelMatchesFreeTierTagsOnly(t *testing.T) {
+	for model, want := range map[string]bool{
+		"deepseek-v4.1-flash:free":         true,
+		"cline-free/nemotron-3.5-super-vl": true,
+		"dots-3-note-preview-free":         true,
+		"openrouter/free":                  true,
+		"flint-v1.0-free":                  true,
+		"freestyle-model":                  false,
+		"deepseek-4.1-flash":               false,
+	} {
+		if got := isFreeModel(model); got != want {
+			t.Errorf("isFreeModel(%q) = %v, want %v", model, got, want)
+		}
+	}
+}
+
 func TestExternalPricingSyncerUpdatesCurrentModelsAndPreservesUnmatchedPrices(t *testing.T) {
 	db := openPricingServiceTestDatabase(t)
 	if _, err := repository.UpsertModelPriceSetting(db, repository.ModelPriceSettingInput{

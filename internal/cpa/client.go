@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -133,6 +134,56 @@ func (c *Client) FetchModels(ctx context.Context) (*ModelsResult, error) {
 		return result, err
 	}
 	return result, nil
+}
+
+// FetchModelAliases reads upstream model name -> exposed alias pairs from the CPA
+// management config in a deterministic order (sections sorted, list order kept).
+func (c *Client) FetchModelAliases(ctx context.Context) ([]ModelAlias, error) {
+	var raw map[string]json.RawMessage
+	if _, _, err := c.doManagementJSONRequest(ctx, cpaManagementConfigEndpoint, &raw, "config"); err != nil {
+		return nil, err
+	}
+	aliases := make([]ModelAlias, 0)
+	appendAliases := func(entries []ModelAlias) {
+		for _, entry := range entries {
+			name, alias := strings.TrimSpace(entry.Name), strings.TrimSpace(entry.Alias)
+			if name != "" && alias != "" && name != alias {
+				aliases = append(aliases, ModelAlias{Name: name, Alias: alias})
+			}
+		}
+	}
+	for _, key := range sortedKeys(raw) {
+		if key == "oauth-model-alias" {
+			var channels map[string][]ModelAlias
+			if err := json.Unmarshal(raw[key], &channels); err != nil {
+				return nil, fmt.Errorf("decode management config %s: %w", key, err)
+			}
+			for _, channel := range sortedKeys(channels) {
+				appendAliases(channels[channel])
+			}
+			continue
+		}
+		// Provider sections (openai-compatibility, claude-api-key, ...) are lists of entries with models.
+		var providers []struct {
+			Models []ModelAlias `json:"models"`
+		}
+		if err := json.Unmarshal(raw[key], &providers); err != nil {
+			continue
+		}
+		for _, provider := range providers {
+			appendAliases(provider.Models)
+		}
+	}
+	return aliases, nil
+}
+
+func sortedKeys[V any](values map[string]V) []string {
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 func (c *Client) FetchAuthFiles(ctx context.Context) (*AuthFilesResult, error) {

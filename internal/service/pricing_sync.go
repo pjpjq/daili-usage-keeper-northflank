@@ -7,6 +7,8 @@ import (
 	"io"
 	"math"
 	"net/http"
+	"regexp"
+	"sort"
 	"strings"
 
 	"cpa-usage-keeper/internal/cpa"
@@ -30,6 +32,7 @@ type modelsDevProvider struct {
 
 type modelsDevModel struct {
 	ID   string        `json:"id"`
+	Name string        `json:"name"`
 	Cost modelsDevCost `json:"cost"`
 }
 
@@ -48,6 +51,11 @@ type catalogPrice struct {
 type modelPriceUpdate struct {
 	model string
 	price catalogPrice
+}
+
+// ModelAliasFetcher is optionally implemented by the models fetcher to expose CPA alias config.
+type ModelAliasFetcher interface {
+	FetchModelAliases(context.Context) ([]cpa.ModelAlias, error)
 }
 
 func NewExternalPricingSyncer(db *gorm.DB, modelsFetcher ModelsFetcher, httpClient *http.Client, sourceURL string) *externalPricingSyncer {
@@ -85,14 +93,20 @@ func (s *externalPricingSyncer) SyncPricing(ctx context.Context) error {
 	}
 	models := normalizeCPAModelInfos(modelsResult)
 
+	priced := make(map[string]catalogPrice, len(models))
 	updates := make([]modelPriceUpdate, 0, len(models))
 	for _, model := range models {
 		price, ok := findCatalogPrice(model, catalog)
+		if isFreeModel(model.ID) {
+			price, ok = catalogPrice{}, true
+		}
 		if !ok {
 			continue
 		}
+		priced[strings.TrimSpace(model.ID)] = price
 		updates = append(updates, modelPriceUpdate{model: strings.TrimSpace(model.ID), price: price})
 	}
+	updates = append(updates, s.aliasPriceUpdates(ctx, priced)...)
 	if err := s.db.Transaction(func(tx *gorm.DB) error {
 		for _, update := range updates {
 			if _, err := repository.UpsertModelPriceSetting(tx, repository.ModelPriceSettingInput{
@@ -116,6 +130,45 @@ func (s *externalPricingSyncer) SyncPricing(ctx context.Context) error {
 		"used_models":       len(models),
 	}).Info("external pricing sync completed")
 	return nil
+}
+
+// aliasPriceUpdates copies alias prices to upstream model names, because usage events
+// record the upstream name while CPA /v1/models only lists the alias.
+func (s *externalPricingSyncer) aliasPriceUpdates(ctx context.Context, priced map[string]catalogPrice) []modelPriceUpdate {
+	fetcher, ok := s.modelsFetcher.(ModelAliasFetcher)
+	if !ok {
+		return nil
+	}
+	aliases, err := fetcher.FetchModelAliases(ctx)
+	if err != nil {
+		logrus.WithError(err).Warn("fetch CPA model aliases for pricing sync failed; skipping alias prices")
+		return nil
+	}
+	updates := make([]modelPriceUpdate, 0, len(aliases))
+	for _, alias := range aliases {
+		name := strings.TrimSpace(alias.Name)
+		if _, done := priced[name]; done || name == "" {
+			continue
+		}
+		price, ok := priced[strings.TrimSpace(alias.Alias)]
+		if isFreeModel(name) {
+			price, ok = catalogPrice{}, true
+		}
+		if !ok {
+			continue
+		}
+		priced[name] = price
+		updates = append(updates, modelPriceUpdate{model: name, price: price})
+	}
+	return updates
+}
+
+// freeModelToken matches the "free" tier tag in IDs such as "x:free", "x-free" and "cline-free/x".
+var freeModelToken = regexp.MustCompile(`(^|[-:/_])free($|[-:/_])`)
+
+// isFreeModel follows the free-tier ID convention (OpenRouter/Kilo/Cline), which models.dev prices at 0.
+func isFreeModel(modelID string) bool {
+	return freeModelToken.MatchString(strings.ToLower(strings.TrimSpace(modelID)))
 }
 
 func (s *externalPricingSyncer) fetchCatalog(ctx context.Context) (modelsDevCatalog, error) {
@@ -180,12 +233,46 @@ func findProviderModel(providerName string, provider modelsDevProvider, modelID 
 	if slash := strings.LastIndex(wanted, "/"); slash >= 0 && slash < len(wanted)-1 {
 		wanted = wanted[slash+1:]
 	}
-	for _, candidate := range catalogModelCandidates(providerName, wanted) {
+	candidates := catalogModelCandidates(providerName, wanted)
+	for _, candidate := range candidates {
 		for key, model := range provider.Models {
 			if strings.ToLower(strings.TrimSpace(key)) == candidate || strings.ToLower(strings.TrimSpace(model.ID)) == candidate {
 				return model, true
 			}
 		}
+	}
+	for _, candidate := range candidates {
+		if model, ok := findProviderModelByName(provider, candidate); ok {
+			return model, true
+		}
+	}
+	return modelsDevModel{}, false
+}
+
+// findProviderModelByName matches display names ("Claude Opus 5.5" -> claude-opus-5.5) and an
+// undated ID against a single dated snapshot ("DeepSeek V4.1 Flash 1017" -> deepseek-v4.1-flash).
+func findProviderModelByName(provider modelsDevProvider, wanted string) (modelsDevModel, bool) {
+	keys := make([]string, 0, len(provider.Models))
+	for key := range provider.Models {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	dated := make([]modelsDevModel, 0, 1)
+	for _, key := range keys {
+		model := provider.Models[key]
+		name := strings.ToLower(strings.Join(strings.Fields(model.Name), "-"))
+		if name == "" {
+			continue
+		}
+		if name == wanted {
+			return model, true
+		}
+		if suffix, ok := strings.CutPrefix(name, wanted+"-"); ok && suffix != "" && strings.Trim(suffix, "0123456789") == "" {
+			dated = append(dated, model)
+		}
+	}
+	if len(dated) == 1 {
+		return dated[0], true
 	}
 	return modelsDevModel{}, false
 }
@@ -224,7 +311,21 @@ func providerCandidates(model cpa.ModelInfo) []string {
 	}
 	appendCandidate(inferProvider(model.ID))
 	appendCandidate(model.OwnedBy)
+	appendCandidate(fallbackProvider(model.ID))
 	return candidates
+}
+
+// fallbackProvider is tried after owned_by so reseller-hosted models (e.g. glm-5.3 on evroc) get list prices
+// without overriding a reseller price the catalog already has (e.g. glm-5.2 on sensenova).
+func fallbackProvider(modelID string) string {
+	model := strings.ToLower(strings.TrimSpace(modelID))
+	if slash := strings.LastIndex(model, "/"); slash >= 0 {
+		model = model[slash+1:]
+	}
+	if strings.HasPrefix(model, "glm-") {
+		return "zai"
+	}
+	return ""
 }
 
 func normalizeProvider(provider string) string {
@@ -239,6 +340,8 @@ func normalizeProvider(provider string) string {
 		return "moonshotai"
 	case "mimo":
 		return "xiaomi"
+	case "zai-org", "z-ai", "zhipu":
+		return "zai"
 	default:
 		return strings.ToLower(strings.TrimSpace(provider))
 	}

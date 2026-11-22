@@ -84,6 +84,12 @@ type ModelInfo struct {
 	OwnedBy string `json:"owned_by,omitempty"`
 }
 
+// ModelAlias maps an upstream model name to the alias CPA exposes in /v1/models.
+type ModelAlias struct {
+	Name  string `json:"name"`
+	Alias string `json:"alias"`
+}
+
 type AuthFilesResult struct {
 	StatusCode int
 	Body       []byte

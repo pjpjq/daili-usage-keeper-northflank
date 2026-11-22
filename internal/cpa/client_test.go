@@ -151,6 +151,45 @@ func TestFetchModelsRejectsMissingExternalAPIKeys(t *testing.T) {
 	}
 }
 
+func TestFetchModelAliasesReadsProviderAndOAuthAliasesFromConfig(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != cpaManagementConfigEndpoint {
+			t.Fatalf("unexpected path %q", r.URL.Path)
+		}
+		if got := r.Header.Get("Authorization"); got != "Bearer management-secret" {
+			t.Fatalf("expected management Authorization header, got %q", got)
+		}
+		_, _ = w.Write([]byte(`{
+			"debug": false,
+			"models": {},
+			"openai-compatibility": [{"name":"evroc","models":[{"name":"zai-org/GLM-5.3","alias":"glm-5.3"},{"name":"glm-5.3-flash"},{"name":"same","alias":"same"}]}],
+			"claude-api-key": [{"models":[{"name":"claude-opus-5-5","alias":"claude-opus-5.5"}]}],
+			"oauth-model-alias": {"devin":[{"name":"devin/claude-opus-5-5","alias":"claude-opus-5.5"}],"antigravity":[{"name":"gemini-3.7-flash-high","alias":"gemini-3.7-flash","fork":true}]}
+		}`))
+	}))
+	defer server.Close()
+
+	client := NewClient(server.URL, "management-secret", 2*time.Second)
+	aliases, err := client.FetchModelAliases(context.Background())
+	if err != nil {
+		t.Fatalf("FetchModelAliases returned error: %v", err)
+	}
+	want := []ModelAlias{
+		{Name: "claude-opus-5-5", Alias: "claude-opus-5.5"},
+		{Name: "gemini-3.7-flash-high", Alias: "gemini-3.7-flash"},
+		{Name: "devin/claude-opus-5-5", Alias: "claude-opus-5.5"},
+		{Name: "zai-org/GLM-5.3", Alias: "glm-5.3"},
+	}
+	if len(aliases) != len(want) {
+		t.Fatalf("unexpected aliases: %#v", aliases)
+	}
+	for i := range want {
+		if aliases[i] != want[i] {
+			t.Fatalf("alias %d = %#v, want %#v", i, aliases[i], want[i])
+		}
+	}
+}
+
 func TestFetchModelsDoesNotUseProviderEndpointsWhenCPAExternalAPIKeysAreMissing(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
