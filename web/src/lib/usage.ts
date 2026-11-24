@@ -85,10 +85,14 @@ export function filterUsageSnapshot(usage: UsageSnapshot, range: UsageTimeRange)
     '7d': 7 * 24 * 60 * 60 * 1000,
   }
   const nowMs = Date.now()
+  const todayStart = new Date(nowMs)
+  todayStart.setHours(0, 0, 0, 0)
   const threshold = range === 'today'
-    ? new Date(nowMs).setHours(0, 0, 0, 0)
+    ? todayStart.getTime()
+    : range === 'yesterday'
+    ? new Date(todayStart.getFullYear(), todayStart.getMonth(), todayStart.getDate() - 1).getTime()
     : latestTimestamp - (presetWindowMs[range] ?? 0)
-  const upperThreshold = range === 'today' ? nowMs : Number.POSITIVE_INFINITY
+  const upperThreshold = range === 'yesterday' ? todayStart.getTime() - 1 : range === 'today' ? nowMs : Number.POSITIVE_INFINITY
 
   const filtered: UsageSnapshot = {
     total_requests: 0,

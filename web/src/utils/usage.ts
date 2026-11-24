@@ -359,11 +359,12 @@ export function resolveUsageFilterWindow(
     };
   }
 
-  if (range === 'today') {
+  if (range === 'today' || range === 'yesterday') {
     const start = new Date(fallbackNow);
     start.setHours(0, 0, 0, 0);
+    const endMs = range === 'yesterday' ? start.getTime() - 1 : fallbackNow;
+    if (range === 'yesterday') start.setDate(start.getDate() - 1);
     const startMs = start.getTime();
-    const endMs = fallbackNow;
     return {
       startMs,
       endMs,

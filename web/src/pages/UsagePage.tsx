@@ -77,6 +77,7 @@ const TIME_RANGE_OPTIONS: ReadonlyArray<{ value: Exclude<UsageTimeRange, '24h'>;
   { value: '8h', labelKey: 'usage_stats.range_8h' },
   { value: '12h', labelKey: 'usage_stats.range_12h' },
   { value: 'today', labelKey: 'usage_stats.range_today' },
+  { value: 'yesterday', labelKey: 'usage_stats.range_yesterday' },
   { value: '7d', labelKey: 'usage_stats.range_7d' },
   { value: 'custom', labelKey: 'usage_stats.range_custom' },
 ];
@@ -247,7 +248,7 @@ export const sanitizeRequestEventFilters = (
 };
 
 const isUsageTimeRange = (value: unknown): value is UsageTimeRange =>
-  value === '4h' || value === '8h' || value === '12h' || value === '24h' || value === 'today' || value === '7d' || value === 'all' || value === 'custom';
+  value === '24h' || TIME_RANGE_OPTIONS.some((option) => option.value === value);
 
 const toDateInputValue = (timestamp: number): string => {
   const date = new Date(timestamp);
@@ -378,7 +379,7 @@ export const getTimeRangeOptions = (translate: Translate) =>
 export const getOverviewHourWindowHours = ({ timeRange, filterWindow }: { timeRange: UsageTimeRange; filterWindow: UsageFilterWindow }) => {
   if (timeRange === 'all') return 24;
   if (timeRange === 'today') return 24;
-  if (timeRange !== 'custom') return Math.min(HOUR_WINDOW_BY_TIME_RANGE[timeRange], 24);
+  if (timeRange !== 'custom' && timeRange !== 'yesterday') return Math.min(HOUR_WINDOW_BY_TIME_RANGE[timeRange], 24);
   if (filterWindow.windowMinutes === undefined) return 24;
   return Math.min(Math.max(Math.ceil(filterWindow.windowMinutes / 60), 1), 24);
 };
@@ -493,6 +494,12 @@ export function UsagePage({ onAuthRequired }: { onAuthRequired?: () => void }) {
   const resolvedRangeEndMs = toTimestampMs(usage?.range_end);
   const filterWindow = useMemo<UsageFilterWindow>(() => {
     if (!usage) return {};
+    if (timeRange === 'yesterday' && resolvedRangeStartMs !== undefined && resolvedRangeEndMs !== undefined) {
+      return resolveUsageFilterWindow(usage.usage, 'custom', {
+        customStart: resolvedRangeStartMs,
+        customEnd: resolvedRangeEndMs,
+      });
+    }
     return resolveUsageFilterWindow(usage.usage, timeRange, {
       nowMs: resolvedRangeEndMs ?? lastRefreshedAt?.getTime() ?? Date.now(),
       customStart:

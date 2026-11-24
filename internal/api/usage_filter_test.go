@@ -89,6 +89,40 @@ func TestParseUsageFilterQueryTodayRangeUsesLocalDSTBoundary(t *testing.T) {
 	}
 }
 
+func TestParseUsageFilterQueryYesterdayUsesLocalCalendarDay(t *testing.T) {
+	previousLocal := time.Local
+	t.Cleanup(func() { time.Local = previousLocal })
+	for _, tc := range []struct {
+		zone, anchor, start, nextDay string
+	}{
+		{"Asia/Shanghai", "2026-04-30T16:30:00Z", "2026-04-29T16:00:00Z", "2026-04-30T16:00:00Z"},
+		{"America/New_York", "2026-03-09T16:00:00Z", "2026-03-08T05:00:00Z", "2026-03-09T04:00:00Z"},
+	} {
+		t.Run(tc.zone, func(t *testing.T) {
+			location, err := time.LoadLocation(tc.zone)
+			if err != nil {
+				t.Fatal(err)
+			}
+			time.Local = location
+			anchor, err := time.Parse(time.RFC3339, tc.anchor)
+			if err != nil {
+				t.Fatal(err)
+			}
+			req := httptest.NewRequest("GET", "/api/v1/usage/overview?range=yesterday", nil)
+			filter, err := parseUsageFilterQuery(req, anchor)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if filter.Range != "yesterday" || filter.StartTime == nil || filter.EndTime == nil {
+				t.Fatalf("expected yesterday bounds, got %+v", filter)
+			}
+			if start, nextDay := filter.StartTime.Format(time.RFC3339Nano), filter.EndTime.Add(time.Nanosecond).Format(time.RFC3339Nano); start != tc.start || nextDay != tc.nextDay {
+				t.Fatalf("got [%s, %s), want [%s, %s)", start, nextDay, tc.start, tc.nextDay)
+			}
+		})
+	}
+}
+
 func TestParseUsageFilterQueryCustomRange(t *testing.T) {
 	req := httptest.NewRequest("GET", "/api/v1/usage/overview?range=custom&start=2026-04-20T00:00:00Z&end=2026-04-21T23:59:59Z", nil)
 

@@ -97,9 +97,12 @@ func parseUsageFilterQuery(req *http.Request, anchor time.Time) (service.UsageFi
 	switch rangeValue {
 	case "all":
 		return filter, nil
-	case "today":
+	case "today", "yesterday":
 		localAnchor := anchor.In(time.Local)
 		localStart := time.Date(localAnchor.Year(), localAnchor.Month(), localAnchor.Day(), 0, 0, 0, 0, time.Local)
+		if rangeValue == "yesterday" {
+			localStart = localStart.AddDate(0, 0, -1)
+		}
 		startTime := localStart.UTC()
 		endTime := localStart.AddDate(0, 0, 1).Add(-time.Nanosecond).UTC()
 		filter.StartTime = &startTime
